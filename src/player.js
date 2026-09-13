@@ -32,12 +32,12 @@ async function playTitle(item, options = {}) {
   if (item.mediaType === "tv") {
     const s = item.season || 1;
     const e = item.episode || 1;
-    sources.push({ id: "vidsrc-cc", label: "Server 1", kind: "iframe", url: `https://vidsrc.cc/v2/embed/tv/${tmdbId}/${s}/${e}` });
-    sources.push({ id: "vidsrc-xyz", label: "Server 2", kind: "iframe", url: `https://vidsrc.xyz/embed/tv?tmdb=${tmdbId}&season=${s}&episode=${e}` });
+    sources.push({ id: "vidsrc-net", label: "Server 1", kind: "iframe", url: `https://vidsrc.net/embed/tv?tmdb=${tmdbId}&season=${s}&episode=${e}` });
+    sources.push({ id: "vidlink", label: "Server 2", kind: "iframe", url: `https://vidlink.pro/tv/${tmdbId}/${s}/${e}` });
     sources.push({ id: "superembed", label: "Server 3", kind: "iframe", url: `https://multiembed.mov/?video_id=${tmdbId}&tmdb=1&s=${s}&e=${e}` });
   } else if (item.mediaType === "movie") {
-    sources.push({ id: "vidsrc-cc", label: "Server 1", kind: "iframe", url: `https://vidsrc.cc/v2/embed/movie/${tmdbId}` });
-    sources.push({ id: "vidsrc-xyz", label: "Server 2", kind: "iframe", url: `https://vidsrc.xyz/embed/movie?tmdb=${tmdbId}` });
+    sources.push({ id: "vidsrc-net", label: "Server 1", kind: "iframe", url: `https://vidsrc.net/embed/movie?tmdb=${tmdbId}` });
+    sources.push({ id: "vidlink", label: "Server 2", kind: "iframe", url: `https://vidlink.pro/movie/${tmdbId}` });
     sources.push({ id: "superembed", label: "Server 3", kind: "iframe", url: `https://multiembed.mov/?video_id=${tmdbId}&tmdb=1` });
   }
 
