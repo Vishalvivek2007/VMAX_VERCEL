@@ -75,4 +75,25 @@ app.delete("/api/history/:id", authMiddleware, async (req, res) => {
   }
 });
 
+// ── Sources Route ──────────────────────────────────────────
+app.get("/api/sources", (req, res) => {
+  const { type, tmdbId, season, episode } = req.query;
+  if (!tmdbId) return res.json({ sources: [] });
+
+  const sources = [];
+  if (type === "tv") {
+    sources.push({ id: "vidsrc-cc", label: "Server 1", kind: "iframe", url: `https://vidsrc.cc/v2/embed/tv/${tmdbId}/${season}/${episode}` });
+    sources.push({ id: "vidsrc-xyz", label: "Server 2", kind: "iframe", url: `https://vidsrc.xyz/embed/tv?tmdb=${tmdbId}&season=${season}&episode=${episode}` });
+    sources.push({ id: "superembed", label: "Server 3", kind: "iframe", url: `https://multiembed.mov/?video_id=${tmdbId}&tmdb=1&s=${season}&e=${episode}` });
+  } else {
+    sources.push({ id: "vidsrc-cc", label: "Server 1", kind: "iframe", url: `https://vidsrc.cc/v2/embed/movie/${tmdbId}` });
+    sources.push({ id: "vidsrc-xyz", label: "Server 2", kind: "iframe", url: `https://vidsrc.xyz/embed/movie?tmdb=${tmdbId}` });
+    sources.push({ id: "superembed", label: "Server 3", kind: "iframe", url: `https://multiembed.mov/?video_id=${tmdbId}&tmdb=1` });
+  }
+
+  res.json({ sources });
+});
+
+app.post("/api/sources/health", (req, res) => res.json({ success: true }));
+
 module.exports = app;
