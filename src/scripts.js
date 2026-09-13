@@ -1,6 +1,8 @@
 // ── CONFIG ───────────────────────────────────────────────────
 const TOKEN_KEY   = "vmax_token";
 const USER_KEY    = "vmax_user";
+const APP_ORIGIN  = window.location.origin;
+const API_BASE    = `${APP_ORIGIN}/api`;
 const TMDB_BASE   = "https://api.themoviedb.org/3";
 const TMDB_KEY    = "d21a71154cf569509f6f03739e4a33da"; // Embedded for static hosting
 const IMG_BASE    = "https://image.tmdb.org/t/p/w500";
@@ -11,8 +13,7 @@ const PLACEHOLDER = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg
 // ── STATE ────────────────────────────────────────────────────
 let currentUser      = JSON.parse(localStorage.getItem(USER_KEY) || "null");
 let authToken        = localStorage.getItem(TOKEN_KEY) || null;
-let userWatchlist    = JSON.parse(localStorage.getItem("vmax_watchlist") || "[]");
-let userHistory      = JSON.parse(localStorage.getItem("vmax_history") || "[]");
+let userWatchlist    = [];
 let currentSection   = "home";
 let currentPlayer    = null;
 let searchTimeout    = null;
@@ -34,57 +35,34 @@ async function tmdb(endpoint, params = "") {
   }
 }
 
-// ── MOCK API FETCH ──────────────────────────────────────
+// ── API FETCH (backend) ──────────────────────────────────────
 async function api(method, path, body = null) {
-  // Mock backend logic using localStorage
-  await sleep(100);
-  
-  if (path === "/auth/register" || path === "/auth/login") {
-    if (!body || !body.email || !body.password) return { error: "Missing fields" };
-    return { token: "dummy_token_123", user: { id: "1", username: body.username || body.email.split('@')[0], email: body.email } };
-  }
-  
-  if (path === "/watchlist" && method === "GET") {
-    return { watchlist: userWatchlist };
-  }
-  
-  if (path === "/watchlist" && method === "POST") {
-    userWatchlist.push(body);
-    localStorage.setItem("vmax_watchlist", JSON.stringify(userWatchlist));
-    return { watchlist: userWatchlist };
-  }
-  
-  if (path.startsWith("/watchlist/") && method === "DELETE") {
-    const movieId = parseInt(path.split("/").pop(), 10);
-    userWatchlist = userWatchlist.filter(w => w.movieId !== movieId);
-    localStorage.setItem("vmax_watchlist", JSON.stringify(userWatchlist));
-    return { watchlist: userWatchlist };
-  }
-  
-  if (path === "/history/continue" && method === "GET") {
-    return { items: userHistory };
-  }
-  
-  if (path === "/history" && method === "POST") {
-    const idx = userHistory.findIndex(h => h.tmdbId === body.tmdbId);
-    if (idx >= 0) {
-      userHistory[idx] = { ...userHistory[idx], ...body };
-    } else {
-      userHistory.unshift(body);
+  const opts = {
+    method,
+    headers: { "Content-Type": "application/json" }
+  };
+  if (authToken) opts.headers["Authorization"] = `Bearer ${authToken}`;
+  if (body) opts.body = JSON.stringify(body);
+
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      const res = await fetch(`${API_BASE}${path}`, opts);
+      const data = await res.json().catch(() => ({}));
+
+      if (res.ok) return data;
+      if (![502, 503, 504].includes(res.status) || attempt === 3) {
+        return data.error ? data : { error: data.message || `Request failed (${res.status})` };
+      }
+    } catch (err) {
+      if (attempt === 3) {
+        return { error: "Server is waking up. Please try again in a few seconds." };
+      }
     }
-    userHistory.forEach(h => { h.percent = (h.position / h.duration) * 100; });
-    localStorage.setItem("vmax_history", JSON.stringify(userHistory));
-    return { success: true };
-  }
-  
-  if (path.startsWith("/history/") && method === "DELETE") {
-    const tmdbId = parseInt(path.split("/").pop(), 10);
-    userHistory = userHistory.filter(h => h.tmdbId !== tmdbId);
-    localStorage.setItem("vmax_history", JSON.stringify(userHistory));
-    return { success: true };
+
+    await sleep(900 * (attempt + 1));
   }
 
-  return { error: "Not found" };
+  return { error: "Server is waking up. Please try again in a few seconds." };
 }
 
 // ── INIT ─────────────────────────────────────────────────────
