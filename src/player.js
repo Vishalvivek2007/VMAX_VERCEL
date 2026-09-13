@@ -13,7 +13,8 @@ const DRIFT_MS     = 1500;   // room sync: resnap if we're more than this far of
 // listed here AND in the CSP frame-src (backend/server.js) to work.
 const TRUSTED_PLAYER_ORIGINS = [
   window.location.origin,
-  "https://archive.org"
+  "https://archive.org",
+  "https://www.vidking.net"
 ];
 
 let activeHls     = null;
@@ -32,13 +33,9 @@ async function playTitle(item, options = {}) {
   if (item.mediaType === "tv") {
     const s = item.season || 1;
     const e = item.episode || 1;
-    sources.push({ id: "vidsrc-net", label: "Server 1", kind: "iframe", url: `https://vidsrc.net/embed/tv?tmdb=${tmdbId}&season=${s}&episode=${e}` });
-    sources.push({ id: "vidlink", label: "Server 2", kind: "iframe", url: `https://vidlink.pro/tv/${tmdbId}/${s}/${e}` });
-    sources.push({ id: "superembed", label: "Server 3", kind: "iframe", url: `https://multiembed.mov/?video_id=${tmdbId}&tmdb=1&s=${s}&e=${e}` });
+    sources.push({ id: "vidking", label: "Vidking Server", kind: "iframe", url: `https://www.vidking.net/embed/tv/${tmdbId}/${s}/${e}?color=3B5BDB&autoPlay=true` });
   } else if (item.mediaType === "movie") {
-    sources.push({ id: "vidsrc-net", label: "Server 1", kind: "iframe", url: `https://vidsrc.net/embed/movie?tmdb=${tmdbId}` });
-    sources.push({ id: "vidlink", label: "Server 2", kind: "iframe", url: `https://vidlink.pro/movie/${tmdbId}` });
-    sources.push({ id: "superembed", label: "Server 3", kind: "iframe", url: `https://multiembed.mov/?video_id=${tmdbId}&tmdb=1` });
+    sources.push({ id: "vidking", label: "Vidking Server", kind: "iframe", url: `https://www.vidking.net/embed/movie/${tmdbId}?color=3B5BDB&autoPlay=true` });
   }
 
   if (!sources.length) return showUnavailable(item);
@@ -143,16 +140,36 @@ function mountVideo(options) {
   return video;
 }
 
-// ── Iframe embed — bypass handshake for third-party embeds ──
+// ── Iframe embed — handshake or bust ─────────────────────────
 function playIframe(source, options) {
   return new Promise(resolve => {
     const stage = document.getElementById("player-stage");
     stage.innerHTML = `<iframe class="vmax-frame" src="${source.url}" frameborder="0"
       allowfullscreen allow="autoplay; fullscreen; encrypted-media; picture-in-picture"></iframe>`;
 
-    // Without a custom wrapper, third-party embeds don't emit our PLAYER_EVENT.
-    // Assume success as soon as it's injected.
-    resolve(true);
+    let settled = false;
+    const done = ok => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (!ok) window.removeEventListener("message", onMsg);
+      resolve(ok);
+    };
+
+    const onMsg = e => {
+      // Without this check, any frame on the page can forge playback events.
+      if (!TRUSTED_PLAYER_ORIGINS.includes(e.origin)) return;
+      const msg = safeParse(e.data);
+      if (!msg) return;
+      if (msg.type === "PLAYER_EVENT") {
+        done(true);                                  // proof of life
+        const d = msg.data || {};
+        emit(d.event, Number(d.currentTime ?? d.time ?? 0), d.duration);
+      }
+    };
+
+    window.addEventListener("message", onMsg);
+    const timer = setTimeout(() => done(false), HANDSHAKE_MS);
   });
 }
 
