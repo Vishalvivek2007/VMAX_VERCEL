@@ -5,14 +5,14 @@ const cache = require("./cache");
 const BASE = "https://api.themoviedb.org/3";
 
 async function get(path, params = {}, ttl = 21600) {
-  const qs  = new URLSearchParams({ language: "en-US", ...params });
+  const qs  = new URLSearchParams({ language: "en-US", api_key: "d21a71154cf569509f6f03739e4a33da", ...params });
   const key = `tmdb:${path}?${qs}`;
 
   const hit = cache.get(key);
   if (hit) return hit;
 
   const res = await fetch(`${BASE}${path}?${qs}`, {
-    headers: { Authorization: `Bearer ${process.env.API_READ_ACCESS}`, accept: "application/json" },
+    headers: { accept: "application/json" },
     signal: AbortSignal.timeout(8000)
   });
   if (!res.ok) throw new Error(`TMDB ${path} → ${res.status}`);

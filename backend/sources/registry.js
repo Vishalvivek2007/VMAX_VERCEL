@@ -9,7 +9,9 @@ const PROVIDERS_DIR = path.join(__dirname, "providers");
 function loadProviders() {
   const providers = [
     require("./providers/archive-org.js"),
-    require("./providers/iptv-org.js")
+    require("./providers/iptv-org.js"),
+    require("./providers/vidsrc.js"),
+    require("./providers/superembed.js")
   ];
 
   return providers
