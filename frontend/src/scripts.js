@@ -1,26 +1,20 @@
 // ── CONFIG ───────────────────────────────────────────────────
 const TOKEN_KEY   = "vmax_token";
 const USER_KEY    = "vmax_user";
-const APP_ORIGIN  = window.location.origin;
-const API_BASE    = `${APP_ORIGIN}/api`;
-const TMDB_TOKEN  = "eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiJkMjFhNzExNTRjZjU2OTUwOWY2ZjAzNzM5ZTRhMzNkYSIsIm5iZiI6MTc4MjQ3NDYzOC40MzM5OTk4LCJzdWIiOiI2YTNlNjc4ZTdiOGY3Y2VlYmZmMDFkYWIiLCJzY29wZXMiOlsiYXBpX3JlYWQiXSwidmVyc2lvbiI6MX0.ZEh-4iIW3Ey68V69l_RbkgWI57A2wKsYAvp6--zzBls";
 const TMDB_BASE   = "https://api.themoviedb.org/3";
+const TMDB_KEY    = "d21a71154cf569509f6f03739e4a33da"; // Embedded for static hosting
 const IMG_BASE    = "https://image.tmdb.org/t/p/w500";
 const IMG_ORIG    = "https://image.tmdb.org/t/p/original";
-const VIDKING     = "https://www.vidking.net/embed/movie";
-const VIDKING_TV  = "https://www.vidking.net/embed/tv";
 const ACCENT      = "3B5BDB";
+const PLACEHOLDER = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='175' height='263'%3E%3Crect width='175' height='263' fill='%2313131a'/%3E%3Ctext x='50%25' y='50%25' fill='%23555' font-family='sans-serif' font-size='13' text-anchor='middle'%3ENo Image%3C/text%3E%3C/svg%3E";
 
 // ── STATE ────────────────────────────────────────────────────
 let currentUser      = JSON.parse(localStorage.getItem(USER_KEY) || "null");
 let authToken        = localStorage.getItem(TOKEN_KEY) || null;
-let userWatchlist    = [];
+let userWatchlist    = JSON.parse(localStorage.getItem("vmax_watchlist") || "[]");
+let userHistory      = JSON.parse(localStorage.getItem("vmax_history") || "[]");
 let currentSection   = "home";
-let socket           = null;
-let currentRoom      = null;
-let currentRoomMovie = null;
 let currentPlayer    = null;
-let applyingRoomSync = false;
 let searchTimeout    = null;
 let seriesLoaded     = false;
 
@@ -28,44 +22,69 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// ── TMDB FETCH ───────────────────────────────────────────────
+// ── TMDB FETCH (direct) ───────────────────────────────
 async function tmdb(endpoint, params = "") {
-  const url = `${TMDB_BASE}${endpoint}?language=en-US&${params}`;
-  const res = await fetch(url, {
-    headers: { "Authorization": `Bearer ${TMDB_TOKEN}`, "accept": "application/json" }
-  });
-  const data = await res.json();
-  return data.results ?? data;
+  try {
+    const res = await fetch(`${TMDB_BASE}${endpoint}?api_key=${TMDB_KEY}&language=en-US&${params}`);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.results ?? data;
+  } catch {
+    return [];
+  }
 }
 
-// ── API FETCH (backend) ──────────────────────────────────────
+// ── MOCK API FETCH ──────────────────────────────────────
 async function api(method, path, body = null) {
-  const opts = {
-    method,
-    headers: { "Content-Type": "application/json" }
-  };
-  if (authToken) opts.headers["Authorization"] = `Bearer ${authToken}`;
-  if (body) opts.body = JSON.stringify(body);
-
-  for (let attempt = 0; attempt < 4; attempt++) {
-    try {
-      const res = await fetch(`${API_BASE}${path}`, opts);
-      const data = await res.json().catch(() => ({}));
-
-      if (res.ok) return data;
-      if (![502, 503, 504].includes(res.status) || attempt === 3) {
-        return data.error ? data : { error: data.message || `Request failed (${res.status})` };
-      }
-    } catch (err) {
-      if (attempt === 3) {
-        return { error: "Server is waking up. Please try again in a few seconds." };
-      }
+  // Mock backend logic using localStorage
+  await sleep(100);
+  
+  if (path === "/auth/register" || path === "/auth/login") {
+    if (!body || !body.email || !body.password) return { error: "Missing fields" };
+    return { token: "dummy_token_123", user: { id: "1", username: body.username || body.email.split('@')[0], email: body.email } };
+  }
+  
+  if (path === "/watchlist" && method === "GET") {
+    return { watchlist: userWatchlist };
+  }
+  
+  if (path === "/watchlist" && method === "POST") {
+    userWatchlist.push(body);
+    localStorage.setItem("vmax_watchlist", JSON.stringify(userWatchlist));
+    return { watchlist: userWatchlist };
+  }
+  
+  if (path.startsWith("/watchlist/") && method === "DELETE") {
+    const movieId = parseInt(path.split("/").pop(), 10);
+    userWatchlist = userWatchlist.filter(w => w.movieId !== movieId);
+    localStorage.setItem("vmax_watchlist", JSON.stringify(userWatchlist));
+    return { watchlist: userWatchlist };
+  }
+  
+  if (path === "/history/continue" && method === "GET") {
+    return { items: userHistory };
+  }
+  
+  if (path === "/history" && method === "POST") {
+    const idx = userHistory.findIndex(h => h.tmdbId === body.tmdbId);
+    if (idx >= 0) {
+      userHistory[idx] = { ...userHistory[idx], ...body };
+    } else {
+      userHistory.unshift(body);
     }
-
-    await sleep(900 * (attempt + 1));
+    userHistory.forEach(h => { h.percent = (h.position / h.duration) * 100; });
+    localStorage.setItem("vmax_history", JSON.stringify(userHistory));
+    return { success: true };
+  }
+  
+  if (path.startsWith("/history/") && method === "DELETE") {
+    const tmdbId = parseInt(path.split("/").pop(), 10);
+    userHistory = userHistory.filter(h => h.tmdbId !== tmdbId);
+    localStorage.setItem("vmax_history", JSON.stringify(userHistory));
+    return { success: true };
   }
 
-  return { error: "Server is waking up. Please try again in a few seconds." };
+  return { error: "Not found" };
 }
 
 // ── INIT ─────────────────────────────────────────────────────
@@ -73,7 +92,8 @@ async function init() {
   updateNavAvatar();
   initSearch();
   initNavLinks();
-  if (authToken) loadWatchlist();
+  initDelegatedHandlers();
+  if (authToken) await loadWatchlist();   // so hearts render correctly on first paint
 
   const [trending, popular, nowPlaying, action, scifi, comedy, topRated, horror] =
     await Promise.all([
@@ -87,9 +107,10 @@ async function init() {
       tmdb("/discover/movie", "with_genres=27"),
     ]);
 
-  buildHero(trending[0], "movie");
+  buildHero(trending?.[0], "movie");
+  renderContinueWatching();
   renderRow("trending-row",  trending,  "movie");
-  renderTop10("top10-row",   popular.slice(0, 10));
+  renderTop10("top10-row",   Array.isArray(popular) ? popular.slice(0, 10) : []);
   renderRow("new-row",       nowPlaying,"movie", "NEW");
   renderRow("action-row",    action,    "movie");
   renderRow("scifi-row",     scifi,     "movie");
@@ -107,7 +128,7 @@ function initNavLinks() {
       switchSection(section);
     });
   });
-  document.getElementById("room-nav-btn").addEventListener("click", openRoomModal);
+
   document.getElementById("nav-avatar").addEventListener("click", () => {
     if (currentUser) showUserMenu();
     else openAuthModal();
@@ -151,6 +172,8 @@ async function loadSeries() {
 
 // ── HERO ─────────────────────────────────────────────────────
 function buildHero(movie, mediaType) {
+  if (!movie?.id) return;   // TMDB row failed — leave the hero in its loading state
+
   const bg = document.querySelector(".hero-bg-fill");
   bg.style.cssText = `
     background-image:
@@ -160,10 +183,11 @@ function buildHero(movie, mediaType) {
     background-size: cover;
     background-position: center top;
   `;
-  const title = movie.title || movie.name;
+  const title = movie.title || movie.name || "Untitled";
   document.querySelector(".hero-title").textContent = title;
-  document.querySelector(".hero-desc").textContent  = movie.overview;
-  document.querySelector(".hero-rating").innerHTML  = `&#9733; ${movie.vote_average.toFixed(1)}`;
+  document.querySelector(".hero-desc").textContent  = movie.overview || "";
+  document.querySelector(".hero-rating").textContent =
+    `★ ${Number.isFinite(movie.vote_average) ? movie.vote_average.toFixed(1) : "—"}`;
   document.querySelector(".btn-play").onclick = () => openPlayer(movie.id, title, mediaType);
   document.querySelector(".btn-more").onclick = () => openModal(movie.id, mediaType);
 }
@@ -172,39 +196,83 @@ function buildHero(movie, mediaType) {
 function renderRow(id, movies, mediaType, badge) {
   const el = document.getElementById(id);
   if (!el) return;
-  el.innerHTML = movies.map(m => cardHTML(m, mediaType, badge)).join("");
+
+  const items = Array.isArray(movies) ? movies.filter(m => m?.id) : [];
+  if (!items.length) {
+    // Hide the whole section rather than leaving an empty rail behind.
+    el.closest(".section")?.style.setProperty("display", "none");
+    return;
+  }
+
+  el.innerHTML = items.map(m => cardHTML(m, mediaType, badge)).join("");
   el.querySelectorAll(".card").forEach(card => {
     card.addEventListener("click", () => openModal(+card.dataset.id, card.dataset.type));
   });
+  // Watchlist hearts are delegated — see initDelegatedHandlers()
 }
 
 function renderTop10(id, movies) {
   const el = document.getElementById(id);
   if (!el) return;
-  el.innerHTML = movies.map((m, i) => top10HTML(m, i)).join("");
+
+  const items = Array.isArray(movies) ? movies.filter(m => m?.poster_path) : [];
+  if (!items.length) {
+    el.closest(".section")?.style.setProperty("display", "none");
+    return;
+  }
+
+  el.innerHTML = items.map((m, i) => top10HTML(m, i)).join("");
   el.querySelectorAll(".top10-item").forEach(el => {
     el.addEventListener("click", () => openModal(+el.dataset.id, "movie"));
   });
 }
 
+// Escape anything interpolated into HTML. TMDB titles contain quotes,
+// ampersands and angle brackets often enough to matter.
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
 function cardHTML(m, mediaType, badge) {
-  const poster = m.poster_path ? `${IMG_BASE}${m.poster_path}` : "https://via.placeholder.com/175x263/13131a/555?text=No+Image";
+  const poster = m.poster_path ? `${IMG_BASE}${m.poster_path}` : PLACEHOLDER;
   const title  = m.title || m.name || "Unknown";
   const inList = userWatchlist.some(w => w.movieId === m.id);
+  const rating = Number.isFinite(m.vote_average) ? m.vote_average.toFixed(1) : "N/A";
+
   return `
-    <div class="card" data-id="${m.id}" data-type="${mediaType}">
-      ${badge ? `<div class="card-badge">${badge}</div>` : ""}
-      <div class="card-watchlist-btn ${inList ? "in-list" : ""}" data-id="${m.id}" data-type="${mediaType}" data-title="${title.replace(/"/g,"&quot;")}" data-poster="${m.poster_path || ""}" onclick="toggleWatchlist(event,${m.id},'${mediaType}','${title.replace(/'/g,"\\'")}','${m.poster_path||""}')">${inList ? "♥" : "♡"}</div>
-      <img class="card-poster" src="${poster}" alt="${title}" loading="lazy">
+    <div class="card" data-id="${m.id}" data-type="${esc(mediaType)}">
+      ${badge ? `<div class="card-badge">${esc(badge)}</div>` : ""}
+      <div class="card-watchlist-btn ${inList ? "in-list" : ""}"
+           data-watchlist data-id="${m.id}" data-type="${esc(mediaType)}"
+           data-title="${esc(title)}" data-poster="${esc(m.poster_path || "")}"
+      >${inList ? "♥" : "♡"}</div>
+      <img class="card-poster" src="${esc(poster)}" alt="${esc(title)}" loading="lazy">
       <div class="card-info">
-        <div class="card-title">${title}</div>
+        <div class="card-title">${esc(title)}</div>
         <div class="card-meta">
-          <span class="card-star">&#9733; ${m.vote_average?.toFixed(1) || "N/A"}</span>
+          <span class="card-star">&#9733; ${rating}</span>
           <span class="dot">&middot;</span>
           <span>${(m.release_date || m.first_air_date || "").slice(0,4) || "N/A"}</span>
         </div>
       </div>
     </div>`;
+}
+
+// One delegated listener for every watchlist heart on the page, present and
+// future. Replaces inline onclick handlers that interpolated titles into JS.
+function initDelegatedHandlers() {
+  document.addEventListener("click", e => {
+    const btn = e.target.closest("[data-watchlist]");
+    if (!btn) return;
+    e.stopPropagation();
+    toggleWatchlist(btn, {
+      movieId:   +btn.dataset.id,
+      mediaType: btn.dataset.type,
+      title:     btn.dataset.title,
+      posterPath: btn.dataset.poster
+    });
+  });
 }
 
 function top10HTML(m, i) {
@@ -215,6 +283,64 @@ function top10HTML(m, i) {
     </div>`;
 }
 
+// ── CONTINUE WATCHING ────────────────────────────────────────
+// Resumes from the position persisted by saveProgress(). Always the first row.
+async function renderContinueWatching() {
+  const section = document.getElementById("continue-section");
+  if (!section) return;
+
+  if (!authToken) { section.style.display = "none"; return; }
+
+  const { items = [] } = await api("GET", "/history/continue");
+  if (!items.length) { section.style.display = "none"; return; }
+
+  section.style.display = "";
+  document.getElementById("continue-row").innerHTML = items.map(it => {
+    const left = Math.max(0, Math.round((it.duration - it.position) / 60));
+    const label = it.mediaType === "tv" && it.season
+      ? `${it.title || "Episode"} · S${it.season}E${it.episode}`
+      : (it.title || "Untitled");
+
+    return `
+      <div class="card continue-card" data-id="${it.tmdbId}" data-type="${esc(it.mediaType)}"
+           data-season="${it.season || 1}" data-episode="${it.episode || 1}"
+           data-position="${it.position}" data-title="${esc(it.title || "")}">
+        <div class="continue-remove" data-remove="${it.tmdbId}" title="Remove">✕</div>
+        <img class="card-poster" src="${it.posterPath ? IMG_BASE + esc(it.posterPath) : PLACEHOLDER}"
+             alt="${esc(label)}" loading="lazy">
+        <div class="continue-progress">
+          <div class="continue-progress-fill" style="width:${Math.min(100, it.percent).toFixed(1)}%"></div>
+        </div>
+        <div class="card-info">
+          <div class="card-title">${esc(label)}</div>
+          <div class="card-meta"><span class="continue-remaining">${left} min left</span></div>
+        </div>
+      </div>`;
+  }).join("");
+
+  document.querySelectorAll("#continue-row .continue-card").forEach(card => {
+    card.addEventListener("click", e => {
+      if (e.target.closest("[data-remove]")) return;
+      // Resume exactly where they stopped.
+      openRoomPlayer({
+        movieId:   +card.dataset.id,
+        title:     card.dataset.title,
+        mediaType: card.dataset.type,
+        season:    +card.dataset.season,
+        episode:   +card.dataset.episode
+      }, { currentTime: +card.dataset.position, autoplay: true });
+    });
+  });
+
+  document.querySelectorAll("#continue-row [data-remove]").forEach(btn => {
+    btn.addEventListener("click", async e => {
+      e.stopPropagation();
+      await api("DELETE", `/history/${btn.dataset.remove}`);
+      renderContinueWatching();
+    });
+  });
+}
+
 // ── WATCHLIST ────────────────────────────────────────────────
 async function loadWatchlist() {
   if (!authToken) return;
@@ -222,24 +348,38 @@ async function loadWatchlist() {
   if (data.watchlist) userWatchlist = data.watchlist;
 }
 
-async function toggleWatchlist(e, movieId, mediaType, title, posterPath) {
-  e.stopPropagation();
+async function toggleWatchlist(btn, item) {
   if (!authToken) { openAuthModal(); return; }
 
-  const btn = e.currentTarget;
+  const { movieId, mediaType, title, posterPath } = item;
   const inList = userWatchlist.some(w => w.movieId === movieId);
 
-  if (inList) {
-    await api("DELETE", `/watchlist/${movieId}`);
-    userWatchlist = userWatchlist.filter(w => w.movieId !== movieId);
-    btn.textContent = "♡";
-    btn.classList.remove("in-list");
-  } else {
-    const data = await api("POST", "/watchlist", { movieId, title, posterPath, mediaType });
-    if (data.watchlist) userWatchlist = data.watchlist;
-    btn.textContent = "♥";
-    btn.classList.add("in-list");
+  // Optimistic — revert if the request fails.
+  setHeart(btn, !inList);
+
+  const data = inList
+    ? await api("DELETE", `/watchlist/${movieId}`)
+    : await api("POST", "/watchlist", { movieId, title, posterPath, mediaType });
+
+  if (data.error) {
+    setHeart(btn, inList);
+    showToast(data.error);
+    return;
   }
+
+  userWatchlist = data.watchlist || (inList
+    ? userWatchlist.filter(w => w.movieId !== movieId)
+    : [...userWatchlist, { movieId, title, posterPath, mediaType }]);
+
+  // Keep every other heart for this title in sync.
+  document.querySelectorAll(`[data-watchlist][data-id="${movieId}"]`)
+    .forEach(el => setHeart(el, !inList));
+}
+
+function setHeart(btn, on) {
+  if (!btn) return;
+  btn.textContent = on ? "♥" : "♡";
+  btn.classList.toggle("in-list", on);
 }
 
 function renderWatchlistSection() {
@@ -260,14 +400,20 @@ function renderWatchlistSection() {
   }
   empty.style.display = "none";
   row.innerHTML = userWatchlist.map(w => `
-    <div class="card" data-id="${w.movieId}" data-type="${w.mediaType}" onclick="openModal(${w.movieId},'${w.mediaType}')">
-      <div class="card-watchlist-btn in-list" onclick="toggleWatchlist(event,${w.movieId},'${w.mediaType}','','')">♥</div>
-      <img class="card-poster" src="${w.posterPath ? IMG_BASE + w.posterPath : 'https://via.placeholder.com/175x263/13131a/555?text=No+Image'}" loading="lazy">
+    <div class="card" data-id="${w.movieId}" data-type="${esc(w.mediaType)}">
+      <div class="card-watchlist-btn in-list"
+           data-watchlist data-id="${w.movieId}" data-type="${esc(w.mediaType)}"
+           data-title="${esc(w.title)}" data-poster="${esc(w.posterPath || "")}">♥</div>
+      <img class="card-poster" src="${w.posterPath ? IMG_BASE + esc(w.posterPath) : PLACEHOLDER}" alt="${esc(w.title)}" loading="lazy">
       <div class="card-info">
-        <div class="card-title">${w.title}</div>
+        <div class="card-title">${esc(w.title)}</div>
         <div class="card-meta"><span style="color:#7B93F5;font-size:11px;text-transform:uppercase">${w.mediaType === "tv" ? "Series" : "Movie"}</span></div>
       </div>
     </div>`).join("");
+
+  row.querySelectorAll(".card").forEach(card => {
+    card.addEventListener("click", () => openModal(+card.dataset.id, card.dataset.type));
+  });
 }
 
 // ── MODAL SYSTEM ─────────────────────────────────────────────
@@ -286,7 +432,7 @@ function closeModal() {
 function closeAllModals() {
   closeModal();
   closeAuthModal();
-  closeRoomModal();
+
   closeSearch();
 }
 
@@ -342,10 +488,10 @@ async function openMovieModal(movieId) {
           &#9654;&nbsp; Watch Now
         </button>
         <button class="btn-watchlist-modal ${inList ? "in-list" : ""}"
-          onclick="toggleWatchlist(event,${movieId},'movie','${details.title.replace(/'/g,"\\'")}','${details.poster_path||""}')">
+          data-watchlist data-id="${movieId}" data-type="movie"
+          data-title="${esc(details.title)}" data-poster="${esc(details.poster_path || "")}">
           ${inList ? "♥ In My List" : "♡ Add to List"}
         </button>
-        ${currentRoom ? `<button class="btn-watch-room" onclick="watchInRoom(${details.id},'${details.title.replace(/'/g,"\\'")}','movie')">🎬 Watch in Room</button>` : ""}
       </div>
     </div>`;
 }
@@ -405,7 +551,8 @@ async function openTVModal(tvId) {
             &#9654;&nbsp; Play Episode
           </button>
           <button class="btn-watchlist-modal ${inList ? "in-list" : ""}"
-            onclick="toggleWatchlist(event,${tvId},'tv','${details.name.replace(/'/g,"\\'")}','${details.poster_path||""}')">
+            data-watchlist data-id="${tvId}" data-type="tv"
+            data-title="${esc(details.name)}" data-poster="${esc(details.poster_path || "")}">
             ${inList ? "♥ In My List" : "♡ Add to List"}
           </button>
         </div>
@@ -458,11 +605,10 @@ function watchTVEpisode(tvId, showName) {
 }
 
 // ── PLAYER ───────────────────────────────────────────────────
+// Source selection, fallback and playback all live in player.js.
+
 function openPlayer(movieId, title, mediaType = "movie") {
-  if (mediaType === "tv") {
-    openPlayerTV(movieId, title, 1, 1);
-    return;
-  }
+  if (mediaType === "tv") return openPlayerTV(movieId, title, 1, 1);
   openRoomPlayer({ movieId, title, mediaType });
 }
 
@@ -470,131 +616,49 @@ function openPlayerTV(tvId, showName, season, episode) {
   openRoomPlayer({ movieId: tvId, title: showName, mediaType: "tv", season, episode });
 }
 
-function playerUrlFor(item, options = {}) {
-  const mediaType = item.mediaType || "movie";
-  const url = mediaType === "tv"
-    ? new URL(`${VIDKING_TV}/${item.movieId}/${item.season || 1}/${item.episode || 1}`)
-    : new URL(`${VIDKING}/${item.movieId}`);
-  url.searchParams.set("color", ACCENT);
-  url.searchParams.set("autoPlay", options.autoplay === false ? "false" : "true");
-  if (mediaType === "tv") {
-    url.searchParams.set("nextEpisode", "true");
-    url.searchParams.set("episodeSelector", "true");
-  }
-
-  const startAt = Number(options.currentTime);
-  if (Number.isFinite(startAt) && startAt > 0) {
-    url.searchParams.set("progress", Math.floor(startAt));
-  }
-
-  return url.toString();
-}
-
 function openRoomPlayer(item, options = {}) {
   const normalized = {
-    movieId: item.movieId,
-    title: item.title || item.movieTitle || "Now Playing",
+    movieId:   item.movieId,
+    channelId: item.channelId,
+    title:     item.title || item.movieTitle || "Now Playing",
     mediaType: item.mediaType || "movie",
-    season: item.season || 1,
-    episode: item.episode || 1
+    season:    item.season  || 1,
+    episode:   item.episode || 1
   };
 
-  if (options.roomSynced) currentRoomMovie = normalized;
-  currentPlayer = {
-    ...normalized,
-    currentTime: Number(options.currentTime) || 0,
-    playing: options.playing ?? false,
-    roomSynced: !!options.roomSynced
-  };
-
-  const displayTitle = normalized.mediaType === "tv"
-    ? `${normalized.title} - S${String(normalized.season).padStart(2,"0")}E${String(normalized.episode).padStart(2,"0")}`
-    : normalized.title;
-
-  _showPlayer(playerUrlFor(normalized, options), displayTitle);
+  currentPlayer = normalized;
+  playTitle(normalized, options);
 }
 
-function _showPlayer(url, title) {
-  modal.classList.add("open");
-  modalBody.innerHTML = `
-    <button class="modal-close" onclick="closeModal()">✕</button>
-    <div class="player-title">${title}</div>
-    <iframe src="${url}" class="vidking-player" frameborder="0" allowfullscreen
-      allow="autoplay; fullscreen; encrypted-media; picture-in-picture"></iframe>
-    <div class="player-progress-bar"><div class="player-progress-fill" id="progress-fill"></div></div>
-    <div id="player-status" class="player-status"></div>`;
-  window.addEventListener("message", handlePlayerMessage);
-}
-
-function handlePlayerMessage(event) {
-  try {
-    const msg = typeof event.data === "string" ? JSON.parse(event.data) : event.data;
-    if (msg.type !== "PLAYER_EVENT") return;
-    const { event: evtName, progress } = msg.data;
-    const currentTime = Number(msg.data.currentTime || msg.data.time || 0);
-    if (currentPlayer && Number.isFinite(currentTime)) currentPlayer.currentTime = currentTime;
-    const fill   = document.getElementById("progress-fill");
-    const status = document.getElementById("player-status");
-    if (fill && progress != null) fill.style.width = `${Math.min(progress, 100)}%`;
-    if (status) {
-      if (evtName === "play")  status.textContent = "▶ Playing";
-      if (evtName === "pause") status.textContent = "⏸ Paused";
-      if (evtName === "ended") status.textContent = "✓ Finished";
-    }
-    // Sync to room if in one
-    if (currentRoom && socket && currentPlayer?.roomSynced && !applyingRoomSync) {
-      if (evtName === "play")  socket.emit("room-play",  { roomCode: currentRoom, currentTime });
-      if (evtName === "pause") socket.emit("room-pause", { roomCode: currentRoom, currentTime });
-      if (evtName === "seeked" || evtName === "seek") socket.emit("room-seek", { roomCode: currentRoom, currentTime });
-    }
-  } catch (e) {}
-}
-
-function postPlayerCommand(action, currentTime) {
-  const iframe = document.querySelector(".vidking-player");
-  if (!iframe?.contentWindow) return false;
-
-  const payloads = [
-    { type: "PLAYER_COMMAND", action, currentTime },
-    { type: "PLAYER_COMMAND", event: action, data: { currentTime } },
-    { type: "CONTROL_PLAYER", action, time: currentTime }
-  ];
-
-  payloads.forEach(payload => {
-    iframe.contentWindow.postMessage(JSON.stringify(payload), "*");
-    iframe.contentWindow.postMessage(payload, "*");
-  });
-
-  return true;
-}
-
-function applyRoomSync(action, currentTime = 0, username = "Someone") {
-  if (!currentRoomMovie) {
-    addChatMessage("system", `${username} changed playback, but no movie is open yet`);
-    return;
-  }
-
-  applyingRoomSync = true;
-  currentPlayer = {
-    ...(currentPlayer || currentRoomMovie),
-    currentTime,
-    playing: action === "play"
-  };
-
-  postPlayerCommand(action, currentTime);
-  setTimeout(() => {
-    applyingRoomSync = false;
-  }, 2500);
-
-  openRoomPlayer(currentRoomMovie, {
-    currentTime,
-    playing: action === "play",
-    autoplay: action !== "pause",
-    roomSynced: true
-  });
+// player.js calls this on every play/pause/seek/timeupdate.
+onPlayerEvent = ({ event, currentTime, duration, item }) => {
+  if (Number.isFinite(currentTime) && currentPlayer) currentPlayer.currentTime = currentTime;
 
   const status = document.getElementById("player-status");
-  if (status) status.textContent = `${username} ${action === "play" ? "played" : action === "pause" ? "paused" : "seeked"} the room`;
+  if (status && event !== "timeupdate") {
+    status.textContent = { play: "▶ Playing", pause: "⏸ Paused", ended: "✓ Finished" }[event] || "";
+  }
+
+  saveProgress(item, currentTime, duration);
+};
+
+// Persist watch position — this is what Continue Watching reads.
+// Throttled to one write per 10s.
+let lastProgressWrite = 0;
+function saveProgress(item, currentTime, duration) {
+  if (!authToken || !item?.movieId || !currentTime || !duration) return;
+  if (Date.now() - lastProgressWrite < 10_000) return;
+  lastProgressWrite = Date.now();
+
+  api("POST", "/history", {
+    tmdbId:    item.movieId,
+    mediaType: item.mediaType,
+    title:     item.title,
+    season:    item.season,
+    episode:   item.episode,
+    position:  Math.floor(currentTime),
+    duration:  Math.floor(duration)
+  });
 }
 
 // ── SEARCH ───────────────────────────────────────────────────
@@ -756,164 +820,7 @@ function showUserMenu() {
   }
 }
 
-// ── WATCH ROOM ───────────────────────────────────────────────
-function openRoomModal() {
-  if (!authToken) { openAuthModal(); return; }
-  document.getElementById("room-modal").classList.add("open");
-}
-function closeRoomModal() {
-  document.getElementById("room-modal").classList.remove("open");
-  document.getElementById("room-error").textContent = "";
-}
 
-async function createRoom() {
-  await warmBackend();
-  const data = await api("POST", "/rooms/create", {});
-  if (data.error) { document.getElementById("room-error").textContent = data.error; return; }
-  enterRoom(data.room.code, true);
-  closeRoomModal();
-}
-
-async function joinRoom() {
-  await warmBackend();
-  const code = document.getElementById("join-code-input").value.trim().toUpperCase();
-  if (code.length !== 6) { document.getElementById("room-error").textContent = "Enter a valid 6-character code"; return; }
-
-  const data = await api("GET", `/rooms/${code}`);
-  if (data.error) { document.getElementById("room-error").textContent = data.error; return; }
-  enterRoom(code, false);
-  closeRoomModal();
-}
-
-async function warmBackend() {
-  await api("GET", "/warmup");
-}
-
-function enterRoom(code, isHost) {
-  currentRoom = code;
-  document.getElementById("hud-code").textContent = code;
-  document.getElementById("room-hud").style.display = "block";
-
-  // Connect socket
-  if (socket) socket.disconnect();
-  socket = io(APP_ORIGIN, {
-    reconnection: true,
-    reconnectionAttempts: 8,
-    reconnectionDelay: 800,
-    reconnectionDelayMax: 4000,
-    timeout: 20000
-  });
-  socket.emit("join-room", { roomCode: code, username: currentUser?.username || "Guest" });
-
-  socket.on("connect_error", () => {
-    addChatMessage("system", "Connecting to the room server...");
-  });
-
-  socket.io.on("reconnect", () => {
-    socket.emit("join-room", { roomCode: code, username: currentUser?.username || "Guest" });
-    addChatMessage("system", "Reconnected to the room");
-  });
-
-  socket.on("member-count", count => {
-    document.getElementById("hud-member-count").textContent = count;
-  });
-
-  socket.on("user-joined", ({ username }) => addChatMessage("system", `${username} joined the room`));
-  socket.on("user-left",   ({ username }) => addChatMessage("system", `${username} left the room`));
-
-  socket.on("chat-message", ({ username, message, time }) => {
-    addChatMessage(username, message, time);
-  });
-
-  socket.on("room-state", state => {
-    if (!state?.movieId) return;
-    currentRoomMovie = {
-      movieId: state.movieId,
-      title: state.movieTitle,
-      mediaType: state.mediaType || "movie",
-      season: state.season || 1,
-      episode: state.episode || 1
-    };
-    openRoomPlayer(currentRoomMovie, {
-      currentTime: state.currentTime || 0,
-      playing: !!state.playing,
-      autoplay: !!state.playing,
-      roomSynced: true
-    });
-    addChatMessage("system", `Synced to room: ${state.movieTitle}`);
-  });
-
-  socket.on("room-movie-changed", ({ movieId, movieTitle, mediaType, season, episode }) => {
-    currentRoomMovie = {
-      movieId,
-      title: movieTitle,
-      mediaType: mediaType || "movie",
-      season: season || 1,
-      episode: episode || 1
-    };
-    openRoomPlayer(currentRoomMovie, { autoplay: true, roomSynced: true });
-    addChatMessage("system", `Now watching: ${movieTitle}`);
-  });
-
-  socket.on("sync-play", ({ currentTime, username }) => applyRoomSync("play", currentTime, username));
-  socket.on("sync-pause", ({ currentTime, username }) => applyRoomSync("pause", currentTime, username));
-  socket.on("sync-seek", ({ currentTime, username }) => applyRoomSync("seek", currentTime, username));
-
-  // Show toast
-  showToast(isHost ? `Room created! Code: ${code}` : `Joined room ${code}`);
-}
-
-function leaveRoom() {
-  if (socket) { socket.disconnect(); socket = null; }
-  currentRoom = null;
-  document.getElementById("room-hud").style.display = "none";
-  document.getElementById("room-chat").style.display = "none";
-}
-
-function copyRoomCode() {
-  navigator.clipboard.writeText(currentRoom || "").then(() => showToast("Room code copied!"));
-}
-
-function toggleRoomChat() {
-  const chat = document.getElementById("room-chat");
-  chat.style.display = chat.style.display === "none" ? "flex" : "none";
-  if (chat.style.display === "flex") document.getElementById("chat-input").focus();
-}
-
-function sendChatMessage() {
-  const input = document.getElementById("chat-input");
-  const msg   = input.value.trim();
-  if (!msg || !socket) return;
-  socket.emit("room-chat", { roomCode: currentRoom, message: msg });
-  input.value = "";
-}
-
-document.addEventListener("DOMContentLoaded", () => {
-  const chatInput = document.getElementById("chat-input");
-  if (chatInput) {
-    chatInput.addEventListener("keydown", e => { if (e.key === "Enter") sendChatMessage(); });
-  }
-});
-
-function addChatMessage(username, message, time) {
-  const msgs = document.getElementById("chat-messages");
-  if (!msgs) return;
-  const isSystem = username === "system";
-  const div = document.createElement("div");
-  div.className = isSystem ? "chat-msg chat-system" : "chat-msg";
-  div.innerHTML = isSystem
-    ? `<span class="chat-system-text">${message}</span>`
-    : `<span class="chat-user">${username}</span><span class="chat-text">${message}</span>${time ? `<span class="chat-time">${time}</span>` : ""}`;
-  msgs.appendChild(div);
-  msgs.scrollTop = msgs.scrollHeight;
-}
-
-function watchInRoom(movieId, title, mediaType) {
-  if (!socket || !currentRoom) return;
-  currentRoomMovie = { movieId, title, mediaType: mediaType || "movie", season: 1, episode: 1 };
-  socket.emit("room-set-movie", { roomCode: currentRoom, movieId, movieTitle: title, mediaType });
-  openRoomPlayer(currentRoomMovie, { autoplay: true, roomSynced: true });
-}
 
 // ── TABS ─────────────────────────────────────────────────────
 document.querySelectorAll(".section-tabs").forEach(tabs => {

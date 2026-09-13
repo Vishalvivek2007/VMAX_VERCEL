@@ -18,3 +18,5 @@ services:
         sync: false
       - key: API_KEY
         sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false

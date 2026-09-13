@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>VMAX</title>
+  <link rel="preconnect" href="https://image.tmdb.org" crossorigin />
   <link rel="stylesheet" href="styles/styles.css" />
 </head>
 <body>
@@ -25,12 +26,6 @@
         </svg>
       </button>
     </div>
-    <button class="nav-icon room-btn" id="room-nav-btn" title="Watch Room">
-      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>
-        <path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
-      </svg>
-    </button>
     <div class="nav-avatar" id="nav-avatar">?</div>
   </div>
 </nav>
@@ -80,52 +75,6 @@
   </div>
 </div>
 
-<!-- WATCH ROOM MODAL -->
-<div class="modal-backdrop" id="room-modal">
-  <div class="room-box">
-    <button class="modal-close" onclick="closeRoomModal()">✕</button>
-    <h2 class="room-title">Watch Room <span>🎬</span></h2>
-    <p class="room-subtitle">Watch in sync with a friend. Share a room code and watch together.</p>
-
-    <div id="room-create-section">
-      <button class="btn-room-create" id="btn-create-room" onclick="createRoom()">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-        Create a Room
-      </button>
-      <div class="room-divider"><span>or join one</span></div>
-      <div class="room-join-wrap">
-        <input class="auth-input room-code-input" id="join-code-input" placeholder="Enter 6-digit room code" maxlength="6" style="text-transform:uppercase;letter-spacing:4px;text-align:center" />
-        <button class="btn-room-join" onclick="joinRoom()">Join</button>
-      </div>
-      <div class="auth-error" id="room-error"></div>
-    </div>
-  </div>
-</div>
-
-<!-- ACTIVE ROOM HUD (shown when in a room) -->
-<div class="room-hud" id="room-hud" style="display:none">
-  <div class="room-hud-inner">
-    <div class="room-hud-code">
-      Room: <strong id="hud-code">——</strong>
-      <button class="btn-copy-code" onclick="copyRoomCode()" title="Copy code">📋</button>
-    </div>
-    <div class="room-hud-members">
-      <span class="hud-dot"></span>
-      <span id="hud-member-count">1</span> watching
-    </div>
-    <button class="btn-hud-chat" onclick="toggleRoomChat()">💬 Chat</button>
-    <button class="btn-hud-leave" onclick="leaveRoom()">Leave</button>
-  </div>
-  <!-- Floating chat panel -->
-  <div class="room-chat" id="room-chat" style="display:none">
-    <div class="chat-messages" id="chat-messages"></div>
-    <div class="chat-input-wrap">
-      <input class="chat-input" id="chat-input" placeholder="Say something…" maxlength="200" />
-      <button class="btn-chat-send" onclick="sendChatMessage()">➤</button>
-    </div>
-  </div>
-</div>
-
 <!-- HERO -->
 <section class="hero" id="hero-section">
   <div class="hero-bg-fill"></div>
@@ -150,6 +99,13 @@
 
   <!-- MOVIES SECTIONS -->
   <div id="movies-sections">
+    <div class="section" id="continue-section" style="display:none">
+      <div class="section-header">
+        <div class="section-title">Continue Watching</div>
+      </div>
+      <div class="scroll-row" id="continue-row"></div>
+    </div>
+
     <div class="section">
       <div class="section-header">
         <div class="section-title">Trending Today</div>
@@ -256,7 +212,9 @@
   <div id="modal-body" class="modal-content"></div>
 </div>
 
-<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-<script src="src/scripts.js?v=20260630-vidking-tv"></script>
+<script src="vendor/hls.min.js"></script>
+<!-- player.js declares onPlayerEvent, which scripts.js assigns — load it first. -->
+<script src="src/player.js?v=20260802"></script>
+<script src="src/scripts.js?v=20260802"></script>
 </body>
 </html>
