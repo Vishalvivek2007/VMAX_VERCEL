@@ -15,20 +15,6 @@ const userSchema = new mongoose.Schema({
       addedAt:    { type: Date, default: Date.now }
     }
   ],
-  history: [
-    {
-      tmdbId:    { type: Number, required: true },
-      title:     String,
-      posterPath:String,
-      mediaType: { type: String, enum: ["movie", "tv"], default: "movie" },
-      season:    Number,
-      episode:   Number,
-      position:  Number,
-      duration:  Number,
-      percent:   Number,
-      updatedAt: { type: Date, default: Date.now }
-    }
-  ],
   createdAt: { type: Date, default: Date.now }
 });
 
@@ -44,4 +30,4 @@ userSchema.methods.comparePassword = function (candidate) {
   return bcrypt.compare(candidate, this.password);
 };
 
-module.exports = mongoose.models.User || mongoose.model("User", userSchema);
+module.exports = mongoose.model("User", userSchema);

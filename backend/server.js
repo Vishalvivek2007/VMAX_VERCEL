@@ -4,24 +4,75 @@ const http       = require("http");
 const { Server } = require("socket.io");
 const mongoose   = require("mongoose");
 const cors       = require("cors");
+const helmet     = require("helmet");
+const rateLimit  = require("express-rate-limit");
+const jwt        = require("jsonwebtoken");
 const path       = require("path");
 
 const authRoutes      = require("./routes/auth");
 const watchlistRoutes = require("./routes/watchlist");
 const roomRoutes      = require("./routes/rooms");
+const tmdbRoutes      = require("./routes/tmdb");
+const sourceRoutes    = require("./routes/sources");
+const historyRoutes   = require("./routes/history");
+
+// Fail fast rather than silently running prod on a known-public secret.
+if (!process.env.JWT_SECRET) {
+  if (process.env.NODE_ENV === "production") {
+    console.error("❌ JWT_SECRET is required in production. Refusing to start.");
+    process.exit(1);
+  }
+  console.warn("⚠️  JWT_SECRET unset — using a dev-only fallback.");
+}
+
+// Comma-separated list, e.g. "https://vmax.example.com,https://www.vmax.example.com"
+const ORIGINS = (process.env.ALLOWED_ORIGINS || "").split(",").map(o => o.trim()).filter(Boolean);
+const corsOptions = ORIGINS.length
+  ? { origin: ORIGINS, credentials: true }
+  : { origin: true, credentials: true };   // dev: reflect request origin
 
 const app    = express();
 const server = http.createServer(app);
 const io     = new Server(server, {
-  cors: { origin: "*", methods: ["GET", "POST"] }
+  cors: { origin: ORIGINS.length ? ORIGINS : true, methods: ["GET", "POST"] }
 });
 
 server.keepAliveTimeout = 65000;
 server.headersTimeout = 66000;
 
 // ── Middleware ────────────────────────────────────────────
-app.use(cors());
-app.use(express.json());
+app.set("trust proxy", 1);   // behind Render/Cloudflare — needed for correct rate-limit IPs
+
+app.use(helmet({
+  // Player embeds and TMDB images are cross-origin by nature.
+  crossOriginEmbedderPolicy: false,
+  crossOriginResourcePolicy: { policy: "cross-origin" },
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc:  ["'self'"],
+      scriptSrc:   ["'self'", "https://cdn.socket.io"],
+      styleSrc:    ["'self'", "'unsafe-inline'"],
+      imgSrc:      ["'self'", "data:", "https://image.tmdb.org", "https://archive.org"],
+      mediaSrc:    ["'self'", "https:", "blob:"],
+      connectSrc:  ["'self'", "https:", "wss:"],
+      // Allowlist of embed origins. Add a provider's origin here when you add
+      // the provider itself — an embed not listed here will be blocked.
+      frameSrc:    ["'self'", "https://www.youtube.com", "https://archive.org"],
+      objectSrc:   ["'none'"],
+      baseUri:     ["'self'"]
+    }
+  }
+}));
+app.use(cors(corsOptions));
+app.use(express.json({ limit: "100kb" }));
+
+app.use("/api", rateLimit({
+  windowMs: 60_000,
+  max: 200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many requests, slow down." }
+}));
 
 app.get("/health", (req, res) => {
   res.json({
@@ -55,6 +106,9 @@ app.use(express.static(path.join(__dirname, "../frontend"), {
 app.use("/api/auth",      authRoutes);
 app.use("/api/watchlist", watchlistRoutes);
 app.use("/api/rooms",     roomRoutes);
+app.use("/api/tmdb",      tmdbRoutes);
+app.use("/api/sources",   sourceRoutes);
+app.use("/api/history",   historyRoutes);
 
 // ── MongoDB ───────────────────────────────────────────────
 const MONGO_URI = process.env.MONGO_URI || "mongodb://localhost:27017/vmax";
@@ -80,14 +134,31 @@ function stateForJoin(roomCode) {
   };
 }
 
+// Authenticate the socket from the JWT. Without this, anyone who guesses a
+// room code can hijack playback and impersonate any username.
+io.use(async (socket, next) => {
+  const token = socket.handshake.auth?.token;
+  if (!token) return next(new Error("auth required"));
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || "vmax_secret_change_in_prod");
+    const user = await require("./models/User").findById(decoded.id).select("username");
+    if (!user) return next(new Error("user not found"));
+    socket.userId   = String(user._id);
+    socket.username = user.username;   // server-assigned — clients can't spoof it
+    next();
+  } catch {
+    next(new Error("invalid token"));
+  }
+});
+
 io.on("connection", (socket) => {
-  console.log(`🔌 Socket connected: ${socket.id}`);
+  console.log(`🔌 Socket connected: ${socket.id} (${socket.username})`);
 
   // User joins a room
-  socket.on("join-room", ({ roomCode, username }) => {
+  socket.on("join-room", ({ roomCode }) => {
+    if (!/^[A-Z0-9]{4,12}$/.test(String(roomCode || ""))) return;
     socket.join(roomCode);
     socket.roomCode = roomCode;
-    socket.username = username || "Guest";
 
     // Send current room state to the new joiner
     const currentState = stateForJoin(roomCode);
@@ -105,51 +176,54 @@ io.on("connection", (socket) => {
     console.log(`👥 ${socket.username} joined room ${roomCode}`);
   });
 
+  // Every handler below acts on socket.roomCode — the room this socket
+  // actually joined — never on a roomCode from the client payload. Otherwise
+  // any authenticated socket could drive a room it was never in.
+  const room = () => socket.roomCode;
+
   // Host sets the movie
-  socket.on("room-set-movie", ({ roomCode, movieId, movieTitle, mediaType, season, episode }) => {
-    if (!roomStates[roomCode]) roomStates[roomCode] = {};
-    roomStates[roomCode].movieId    = movieId;
-    roomStates[roomCode].movieTitle = movieTitle;
-    roomStates[roomCode].mediaType  = mediaType || "movie";
-    roomStates[roomCode].season     = season || 1;
-    roomStates[roomCode].episode    = episode || 1;
-    roomStates[roomCode].playing    = false;
-    roomStates[roomCode].currentTime = 0;
-    roomStates[roomCode].lastUpdate  = Date.now();
-    socket.to(roomCode).emit("room-movie-changed", { movieId, movieTitle, mediaType, season, episode });
+  socket.on("room-set-movie", ({ movieId, movieTitle, mediaType, season, episode }) => {
+    const code = room();
+    if (!code) return;
+    roomStates[code] = {
+      movieId,
+      movieTitle:  String(movieTitle || "").slice(0, 200),
+      mediaType:   mediaType === "tv" ? "tv" : "movie",
+      season:      Number(season)  || 1,
+      episode:     Number(episode) || 1,
+      playing:     false,
+      currentTime: 0,
+      lastUpdate:  Date.now()
+    };
+    socket.to(code).emit("room-movie-changed", roomStates[code]);
   });
 
-  // Play event
-  socket.on("room-play", ({ roomCode, currentTime }) => {
-    if (!roomStates[roomCode]) roomStates[roomCode] = {};
-    roomStates[roomCode].playing     = true;
-    roomStates[roomCode].currentTime = currentTime;
-    roomStates[roomCode].lastUpdate  = Date.now();
-    socket.to(roomCode).emit("sync-play", { currentTime, username: socket.username });
-  });
+  // Play / pause / seek all mutate the same shape.
+  const syncHandler = (action, playing) => ({ currentTime }) => {
+    const code = room();
+    if (!code) return;
+    const time = Number(currentTime);
+    if (!Number.isFinite(time) || time < 0) return;
 
-  // Pause event
-  socket.on("room-pause", ({ roomCode, currentTime }) => {
-    if (!roomStates[roomCode]) roomStates[roomCode] = {};
-    roomStates[roomCode].playing     = false;
-    roomStates[roomCode].currentTime = currentTime;
-    roomStates[roomCode].lastUpdate  = Date.now();
-    socket.to(roomCode).emit("sync-pause", { currentTime, username: socket.username });
-  });
+    if (!roomStates[code]) roomStates[code] = {};
+    if (playing !== null) roomStates[code].playing = playing;
+    roomStates[code].currentTime = time;
+    roomStates[code].lastUpdate  = Date.now();
+    socket.to(code).emit(`sync-${action}`, { currentTime: time, username: socket.username });
+  };
 
-  // Seek event
-  socket.on("room-seek", ({ roomCode, currentTime }) => {
-    if (!roomStates[roomCode]) roomStates[roomCode] = {};
-    roomStates[roomCode].currentTime = currentTime;
-    roomStates[roomCode].lastUpdate  = Date.now();
-    socket.to(roomCode).emit("sync-seek", { currentTime, username: socket.username });
-  });
+  socket.on("room-play",  syncHandler("play",  true));
+  socket.on("room-pause", syncHandler("pause", false));
+  socket.on("room-seek",  syncHandler("seek",  null));
 
   // Chat message in room
-  socket.on("room-chat", ({ roomCode, message }) => {
-    io.to(roomCode).emit("chat-message", {
-      username: socket.username,
-      message,
+  socket.on("room-chat", ({ message }) => {
+    const code = room();
+    const text = String(message || "").slice(0, 500).trim();
+    if (!code || !text) return;
+    io.to(code).emit("chat-message", {
+      username: socket.username,   // never from the client
+      message: text,               // rendered with textContent on the client
       time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
     });
   });

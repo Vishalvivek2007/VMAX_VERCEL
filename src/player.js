@@ -137,16 +137,36 @@ function mountVideo(options) {
   return video;
 }
 
-// ── Iframe embed — bypass handshake for third-party embeds ──
+// ── Iframe embed — handshake or bust ─────────────────────────
 function playIframe(source, options) {
   return new Promise(resolve => {
     const stage = document.getElementById("player-stage");
     stage.innerHTML = `<iframe class="vmax-frame" src="${source.url}" frameborder="0"
       allowfullscreen allow="autoplay; fullscreen; encrypted-media; picture-in-picture"></iframe>`;
 
-    // Without a custom wrapper, third-party embeds don't emit our PLAYER_EVENT.
-    // Assume success as soon as it's injected.
-    resolve(true);
+    let settled = false;
+    const done = ok => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (!ok) window.removeEventListener("message", onMsg);
+      resolve(ok);
+    };
+
+    const onMsg = e => {
+      // Without this check, any frame on the page can forge playback events.
+      if (!TRUSTED_PLAYER_ORIGINS.includes(e.origin)) return;
+      const msg = safeParse(e.data);
+      if (!msg) return;
+      if (msg.type === "PLAYER_EVENT") {
+        done(true);                                  // proof of life
+        const d = msg.data || {};
+        emit(d.event, Number(d.currentTime ?? d.time ?? 0), d.duration);
+      }
+    };
+
+    window.addEventListener("message", onMsg);
+    const timer = setTimeout(() => done(false), HANDSHAKE_MS);
   });
 }
 
