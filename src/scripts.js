@@ -18,10 +18,72 @@ let currentSection   = "home";
 let currentPlayer    = null;
 let searchTimeout    = null;
 let seriesLoaded     = false;
+let exploreLoaded    = false;
+let explorePage      = 1;
+let exploreTotalPages = 1;
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
+
+// ── LOCAL HISTORY (localStorage) ─────────────────────────────
+// Mirrors the server-side WatchHistory but works without login.
+const HISTORY_KEY = "vmax_history";
+const HISTORY_MAX = 50;
+
+const localHistory = {
+  _read() {
+    try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]"); }
+    catch { return []; }
+  },
+  _write(items) {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(items.slice(0, HISTORY_MAX)));
+  },
+  _key(it) {
+    return `${it.tmdbId}:${it.season ?? ""}:${it.episode ?? ""}`;
+  },
+
+  save(item) {
+    const items = this._read();
+    const key   = this._key(item);
+    const idx   = items.findIndex(i => this._key(i) === key);
+    const percent = item.duration > 0 ? Math.min(100, (item.position / item.duration) * 100) : 0;
+    const entry = {
+      tmdbId:    item.tmdbId ?? item.movieId,
+      mediaType: item.mediaType || "movie",
+      title:     item.title || "Untitled",
+      posterPath: item.posterPath || null,
+      season:    item.season ?? null,
+      episode:   item.episode ?? null,
+      position:  Math.floor(item.position || 0),
+      duration:  Math.floor(item.duration || 0),
+      percent,
+      updatedAt: Date.now()
+    };
+    if (idx >= 0) items.splice(idx, 1);
+    items.unshift(entry);
+    this._write(items);
+  },
+
+  list() {
+    return this._read()
+      .filter(i => i.percent >= 2 && i.percent < 90)
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, 20);
+  },
+
+  remove(tmdbId) {
+    this._write(this._read().filter(i => i.tmdbId !== tmdbId));
+  },
+
+  get(tmdbId, season, episode) {
+    return this._read().find(i =>
+      i.tmdbId === tmdbId &&
+      (i.season ?? null) === (season ?? null) &&
+      (i.episode ?? null) === (episode ?? null)
+    ) || null;
+  }
+};
 
 // ── TMDB FETCH (direct) ───────────────────────────────
 async function tmdb(endpoint, params = "") {
@@ -70,6 +132,7 @@ async function init() {
   updateNavAvatar();
   initSearch();
   initNavLinks();
+  initExplore();
   initDelegatedHandlers();
   if (authToken) await loadWatchlist();   // so hearts render correctly on first paint
 
@@ -122,9 +185,11 @@ function switchSection(section) {
   document.getElementById("hero-section").style.display    = (section === "home" || section === "movies") ? "" : "none";
   document.getElementById("movies-sections").style.display = (section === "home" || section === "movies") ? "" : "none";
   document.getElementById("series-sections").style.display = section === "series" ? "" : "none";
+  document.getElementById("explore-section").style.display = section === "explore" ? "" : "none";
   document.getElementById("watchlist-section").style.display = section === "watchlist" ? "" : "none";
 
   if (section === "series" && !seriesLoaded) loadSeries();
+  if (section === "explore" && !exploreLoaded) runVibeSearch();
   if (section === "watchlist") renderWatchlistSection();
 }
 
@@ -167,6 +232,7 @@ function buildHero(movie, mediaType) {
   document.querySelector(".hero-rating").textContent =
     `★ ${Number.isFinite(movie.vote_average) ? movie.vote_average.toFixed(1) : "—"}`;
   document.querySelector(".btn-play").onclick = () => openPlayer(movie.id, title, mediaType);
+  document.querySelector(".btn-play").onclick = () => openPlayer(movie.id, title, mediaType, movie.poster_path);
   document.querySelector(".btn-more").onclick = () => openModal(movie.id, mediaType);
 }
 
@@ -262,14 +328,34 @@ function top10HTML(m, i) {
 }
 
 // ── CONTINUE WATCHING ────────────────────────────────────────
-// Resumes from the position persisted by saveProgress(). Always the first row.
+// Resumes from the position persisted by saveProgress().
+// Works without login (localStorage). Merges with server data when authenticated.
 async function renderContinueWatching() {
   const section = document.getElementById("continue-section");
   if (!section) return;
 
-  if (!authToken) { section.style.display = "none"; return; }
+  // Get local items (always available)
+  let items = localHistory.list();
 
-  const { items = [] } = await api("GET", "/history/continue");
+  // Merge with server items if logged in
+  if (authToken) {
+    try {
+      const { items: serverItems = [] } = await api("GET", "/history/continue");
+      // Merge: server wins on conflict (by tmdbId+season+episode key)
+      const localMap = new Map(items.map(i => [`${i.tmdbId}:${i.season}:${i.episode}`, i]));
+      for (const si of serverItems) {
+        const key = `${si.tmdbId}:${si.season}:${si.episode}`;
+        const li = localMap.get(key);
+        if (!li || new Date(si.updatedAt).getTime() > (li.updatedAt || 0)) {
+          localMap.set(key, si);
+        }
+      }
+      items = Array.from(localMap.values()).sort((a, b) =>
+        (new Date(b.updatedAt).getTime()) - (new Date(a.updatedAt).getTime())
+      ).slice(0, 20);
+    } catch { /* server unavailable — use local only */ }
+  }
+
   if (!items.length) { section.style.display = "none"; return; }
 
   section.style.display = "";
@@ -313,7 +399,10 @@ async function renderContinueWatching() {
   document.querySelectorAll("#continue-row [data-remove]").forEach(btn => {
     btn.addEventListener("click", async e => {
       e.stopPropagation();
-      await api("DELETE", `/history/${btn.dataset.remove}`);
+      // Remove from local storage
+      localHistory.remove(+btn.dataset.remove);
+      // Also remove from server if logged in
+      if (authToken) await api("DELETE", `/history/${btn.dataset.remove}`);
       renderContinueWatching();
     });
   });
@@ -462,7 +551,7 @@ async function openMovieModal(movieId) {
       <div class="modal-genres">${genres}</div>
       <p class="modal-overview">${details.overview}</p>
       <div class="modal-actions">
-        <button class="btn-watch-now" onclick="openPlayer(${details.id}, '${details.title.replace(/'/g,"\\'")}', 'movie')">
+        <button class="btn-watch-now" onclick="openPlayer(${details.id}, '${details.title.replace(/'/g,"\\'")}', 'movie', '${details.poster_path || ""}')">
           &#9654;&nbsp; Watch Now
         </button>
         <button class="btn-watchlist-modal ${inList ? "in-list" : ""}"
@@ -484,6 +573,7 @@ async function openTVModal(tvId) {
   const genres  = (details.genres || []).map(g => `<span>${g.name}</span>`).join("");
   const seasons = (details.seasons || []).filter(s => s.season_number > 0);
   const inList  = userWatchlist.some(w => w.movieId === tvId);
+  const tvPoster = details.poster_path || "";
 
   const trailerEmbed = trailer
     ? `<iframe src="https://www.youtube.com/embed/${trailer.key}?rel=0&modestbranding=1"
@@ -517,7 +607,7 @@ async function openTVModal(tvId) {
       <!-- Season / Episode Picker -->
       <div class="episode-picker">
         <div class="picker-row">
-          <select class="season-select" id="season-select" onchange="loadEpisodes(${tvId})">
+          <select class="season-select" id="season-select" onchange="loadEpisodes(${tvId}, '${tvPoster}')">
             ${seasonOpts}
           </select>
           <select class="episode-select" id="episode-select">
@@ -525,12 +615,12 @@ async function openTVModal(tvId) {
           </select>
         </div>
         <div class="modal-actions">
-          <button class="btn-watch-now" onclick="watchTVEpisode(${tvId}, '${details.name.replace(/'/g,"\\'")}')">
+          <button class="btn-watch-now" onclick="watchTVEpisode(${tvId}, '${details.name.replace(/'/g,"\\'")}', '${tvPoster}')">
             &#9654;&nbsp; Play Episode
           </button>
           <button class="btn-watchlist-modal ${inList ? "in-list" : ""}"
             data-watchlist data-id="${tvId}" data-type="tv"
-            data-title="${esc(details.name)}" data-poster="${esc(details.poster_path || "")}">
+            data-title="${esc(details.name)}" data-poster="${esc(tvPoster)}">
             ${inList ? "♥ In My List" : "♡ Add to List"}
           </button>
         </div>
@@ -542,10 +632,10 @@ async function openTVModal(tvId) {
     </div>`;
 
   // Auto-load season 1 episodes
-  if (seasons.length) loadEpisodes(tvId);
+  if (seasons.length) loadEpisodes(tvId, tvPoster);
 }
 
-async function loadEpisodes(tvId) {
+async function loadEpisodes(tvId, tvPoster = "") {
   const seasonNum = +document.getElementById("season-select").value;
   const grid      = document.getElementById("episodes-grid");
   const epSelect  = document.getElementById("episode-select");
@@ -561,7 +651,7 @@ async function loadEpisodes(tvId) {
 
   // Render episode cards
   grid.innerHTML = eps.map(ep => `
-    <div class="episode-card" onclick="openPlayerTV(${tvId}, '${ep.name.replace(/'/g,"\\'")}', ${seasonNum}, ${ep.episode_number})">
+    <div class="episode-card" onclick="openPlayerTV(${tvId}, '${ep.name.replace(/'/g,"\\'")}', ${seasonNum}, ${ep.episode_number}, '${tvPoster || ep.still_path || ""}')">
       <div class="ep-thumb-wrap">
         ${ep.still_path
           ? `<img class="ep-thumb" src="${IMG_BASE}${ep.still_path}" loading="lazy">`
@@ -576,22 +666,22 @@ async function loadEpisodes(tvId) {
     </div>`).join("");
 }
 
-function watchTVEpisode(tvId, showName) {
+function watchTVEpisode(tvId, showName, posterPath = "") {
   const seasonNum = +document.getElementById("season-select").value;
   const epNum     = +document.getElementById("episode-select").value;
-  openPlayerTV(tvId, showName, seasonNum, epNum);
+  openPlayerTV(tvId, showName, seasonNum, epNum, posterPath);
 }
 
 // ── PLAYER ───────────────────────────────────────────────────
 // Source selection, fallback and playback all live in player.js.
 
-function openPlayer(movieId, title, mediaType = "movie") {
-  if (mediaType === "tv") return openPlayerTV(movieId, title, 1, 1);
-  openRoomPlayer({ movieId, title, mediaType });
+function openPlayer(movieId, title, mediaType = "movie", posterPath = null) {
+  if (mediaType === "tv") return openPlayerTV(movieId, title, 1, 1, posterPath);
+  openRoomPlayer({ movieId, title, mediaType, posterPath });
 }
 
-function openPlayerTV(tvId, showName, season, episode) {
-  openRoomPlayer({ movieId: tvId, title: showName, mediaType: "tv", season, episode });
+function openPlayerTV(tvId, showName, season, episode, posterPath = null) {
+  openRoomPlayer({ movieId: tvId, title: showName, mediaType: "tv", posterPath, season, episode });
 }
 
 function openRoomPlayer(item, options = {}) {
@@ -600,9 +690,19 @@ function openRoomPlayer(item, options = {}) {
     channelId: item.channelId,
     title:     item.title || item.movieTitle || "Now Playing",
     mediaType: item.mediaType || "movie",
+    posterPath: item.posterPath || null,
     season:    item.season  || 1,
     episode:   item.episode || 1
   };
+
+  // Auto-resume from local history if no explicit currentTime given
+  if (!options.currentTime) {
+    const saved = localHistory.get(normalized.movieId, normalized.season, normalized.episode);
+    if (saved && saved.percent >= 2 && saved.percent < 90) {
+      options.currentTime = saved.position;
+      options.autoplay = true;
+    }
+  }
 
   currentPlayer = normalized;
   playTitle(normalized, options);
@@ -621,22 +721,39 @@ onPlayerEvent = ({ event, currentTime, duration, item }) => {
 };
 
 // Persist watch position — this is what Continue Watching reads.
-// Throttled to one write per 10s.
+// Always writes to localStorage (works without login).
+// Also syncs to server when authenticated. Throttled to one write per 10s.
 let lastProgressWrite = 0;
 function saveProgress(item, currentTime, duration) {
-  if (!authToken || !item?.movieId || !currentTime || !duration) return;
+  if (!item?.movieId || !currentTime || !duration) return;
   if (Date.now() - lastProgressWrite < 10_000) return;
   lastProgressWrite = Date.now();
 
-  api("POST", "/history", {
+  // Always save locally
+  localHistory.save({
     tmdbId:    item.movieId,
     mediaType: item.mediaType,
     title:     item.title,
+    posterPath: item.posterPath || null,
     season:    item.season,
     episode:   item.episode,
-    position:  Math.floor(currentTime),
-    duration:  Math.floor(duration)
+    position:  currentTime,
+    duration:  duration
   });
+
+  // Also sync to server if logged in
+  if (authToken) {
+    api("POST", "/history", {
+      tmdbId:    item.movieId,
+      mediaType: item.mediaType,
+      title:     item.title,
+      posterPath: item.posterPath || null,
+      season:    item.season,
+      episode:   item.episode,
+      position:  Math.floor(currentTime),
+      duration:  Math.floor(duration)
+    });
+  }
 }
 
 // ── SEARCH ───────────────────────────────────────────────────
@@ -799,6 +916,179 @@ function showUserMenu() {
 }
 
 
+
+// ── EXPLORE / VIBE FINDER ────────────────────────────────────
+function initExplore() {
+  const panel = document.querySelector(".explore-panel");
+  if (!panel) return;
+
+  // Click handler for all filter chips
+  panel.querySelectorAll(".chip-group").forEach(group => {
+    group.querySelectorAll(".chip").forEach(chip => {
+      chip.addEventListener("click", () => {
+        group.querySelectorAll(".chip").forEach(c => c.classList.remove("active"));
+        chip.classList.add("active");
+        explorePage = 1;
+        runVibeSearch(1);
+      });
+    });
+  });
+
+  // "Find Bangers" button
+  const submitBtn = document.getElementById("btn-explore-submit");
+  if (submitBtn) {
+    submitBtn.addEventListener("click", () => {
+      explorePage = 1;
+      runVibeSearch(1);
+    });
+  }
+
+  // "Surprise Me" button
+  const surpriseBtn = document.getElementById("btn-explore-surprise");
+  if (surpriseBtn) {
+    surpriseBtn.addEventListener("click", () => {
+      const vibeChips = panel.querySelectorAll('[data-group="vibe"] .chip');
+      const eraChips  = panel.querySelectorAll('[data-group="era"] .chip');
+      
+      vibeChips.forEach(c => c.classList.remove("active"));
+      eraChips.forEach(c => c.classList.remove("active"));
+
+      const randomVibe = vibeChips[Math.floor(Math.random() * vibeChips.length)];
+      const randomEra  = eraChips[Math.floor(Math.random() * eraChips.length)];
+      
+      randomVibe.classList.add("active");
+      randomEra.classList.add("active");
+
+      showToast(`🎲 Vibe: ${randomVibe.textContent.trim()} · ${randomEra.textContent.trim()}`);
+      explorePage = 1;
+      runVibeSearch(1, true);
+    });
+  }
+
+  // Load more button
+  const loadMoreBtn = document.getElementById("explore-load-more");
+  if (loadMoreBtn) {
+    loadMoreBtn.addEventListener("click", () => {
+      explorePage++;
+      runVibeSearch(explorePage);
+    });
+  }
+}
+
+async function runVibeSearch(page = 1, isSurprise = false) {
+  exploreLoaded = true;
+  explorePage = page;
+
+  const resultsGrid = document.getElementById("explore-results");
+  const countEl     = document.getElementById("explore-result-count");
+  const loadMoreBtn = document.getElementById("explore-load-more");
+  if (!resultsGrid) return;
+
+  if (page === 1) {
+    resultsGrid.innerHTML = `<div class="modal-loading" style="grid-column: 1 / -1; padding: 40px 0; text-align: center;">Finding bangers…</div>`;
+    if (countEl) countEl.textContent = "";
+  }
+
+  // Read active chips
+  const activeVibeChip    = document.querySelector('[data-group="vibe"] .chip.active');
+  const activeTypeChip    = document.querySelector('[data-group="type"] .chip.active');
+  const activeEraChip     = document.querySelector('[data-group="era"] .chip.active');
+  const activeQualityChip = document.querySelector('[data-group="quality"] .chip.active');
+
+  const vibe    = activeVibeChip?.dataset.vibe || "chill";
+  const type    = activeTypeChip?.dataset.type || "movie";
+  const era     = activeEraChip?.dataset.era || "all";
+  const quality = activeQualityChip?.dataset.quality || "bangers";
+
+  // Build params
+  const params = [];
+  params.push(`page=${page}`);
+  params.push("include_adult=false");
+
+  // Vibe mapping
+  const vibeGenreMap = {
+    chill:       type === "tv" ? "18|10766|16"      : "18|10749|16|10402",
+    mindbending: type === "tv" ? "9648|10765"        : "9648|878|53",
+    intense:     type === "tv" ? "10759"             : "28|53|10752",
+    funny:       "35",
+    dark:        type === "tv" ? "80|9648"           : "80|53|9648",
+    feelgood:    type === "tv" ? "35|10751"          : "35|10751|10749",
+    scary:       type === "tv" ? "9648"              : "27|53",
+    epic:        type === "tv" ? "10759|10765"       : "12|14|36"
+  };
+
+  if (vibeGenreMap[vibe]) {
+    params.push(`with_genres=${vibeGenreMap[vibe]}`);
+  }
+
+  // Era mapping
+  const dateField = type === "tv" ? "first_air_date" : "primary_release_date";
+  if (era === "2020s") {
+    params.push(`${dateField}.gte=2020-01-01`);
+  } else if (era === "2010s") {
+    params.push(`${dateField}.gte=2010-01-01&${dateField}.lte=2019-12-31`);
+  } else if (era === "2000s") {
+    params.push(`${dateField}.gte=2000-01-01&${dateField}.lte=2009-12-31`);
+  } else if (era === "classic") {
+    params.push(`${dateField}.lte=1999-12-31`);
+  }
+
+  // Quality mapping
+  if (quality === "bangers") {
+    params.push("vote_average.gte=7.5&vote_count.gte=300&sort_by=vote_average.desc");
+  } else if (quality === "acclaimed") {
+    params.push("vote_average.gte=8.0&vote_count.gte=500&sort_by=vote_average.desc");
+  } else if (quality === "gems") {
+    params.push("vote_average.gte=7.2&vote_count.gte=50&vote_count.lte=800&sort_by=vote_average.desc");
+  } else if (quality === "popular") {
+    params.push("sort_by=popularity.desc&vote_count.gte=100");
+  }
+
+  const endpoint = type === "tv" ? "/discover/tv" : "/discover/movie";
+  const items = await tmdb(endpoint, params.join("&"));
+  const validItems = Array.isArray(items) ? items.filter(m => m?.poster_path) : [];
+
+  if (page === 1) {
+    if (!validItems.length) {
+      resultsGrid.innerHTML = `
+        <div class="explore-empty" style="grid-column: 1 / -1;">
+          <p>No bangers found matching this exact combo. Try switching era or quality filter!</p>
+        </div>`;
+      if (countEl) countEl.textContent = "";
+      if (loadMoreBtn) loadMoreBtn.style.display = "none";
+      return;
+    }
+    resultsGrid.innerHTML = validItems.map(m => cardHTML(m, type)).join("");
+    if (countEl) {
+      const vibeLabel = activeVibeChip?.textContent.trim() || "Selected Vibe";
+      countEl.textContent = `Showing verified bangers for ${vibeLabel}`;
+    }
+  } else {
+    // Append to existing
+    const temp = document.createElement("div");
+    temp.innerHTML = validItems.map(m => cardHTML(m, type)).join("");
+    while (temp.firstChild) {
+      resultsGrid.appendChild(temp.firstChild);
+    }
+  }
+
+  // Re-attach card click listeners
+  resultsGrid.querySelectorAll(".card").forEach(card => {
+    if (!card._hasClick) {
+      card._hasClick = true;
+      card.addEventListener("click", () => openModal(+card.dataset.id, card.dataset.type));
+    }
+  });
+
+  // Show or hide load more
+  if (loadMoreBtn) {
+    loadMoreBtn.style.display = validItems.length >= 18 ? "block" : "none";
+  }
+
+  if (isSurprise && validItems[0]) {
+    resultsGrid.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+}
 
 // ── TABS ─────────────────────────────────────────────────────
 document.querySelectorAll(".section-tabs").forEach(tabs => {

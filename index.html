@@ -16,6 +16,7 @@
     <li><a href="#" class="active" data-section="home">Home</a></li>
     <li><a href="#" data-section="movies">Movies</a></li>
     <li><a href="#" data-section="series">Series</a></li>
+    <li><a href="#" data-section="explore">Explore</a></li>
     <li><a href="#" data-section="watchlist">My List</a></li>
   </ul>
   <div class="nav-right">
@@ -189,6 +190,64 @@
     <div class="section">
       <div class="section-header"><div class="section-title">Sci-Fi &amp; Fantasy</div></div>
       <div class="scroll-row" id="scifi-tv-row"></div>
+    </div>
+  </div>
+
+  <!-- EXPLORE / VIBE FINDER SECTION -->
+  <div id="explore-section" style="display:none">
+    <div class="explore-panel">
+      <h2 class="explore-heading">🍿 What are you in the mood for?</h2>
+      
+      <!-- VIBE / MOOD -->
+      <div class="chip-group" data-group="vibe">
+        <span class="chip-group-label">Mood</span>
+        <button class="chip active" data-vibe="chill">🍿 Chill &amp; Easy</button>
+        <button class="chip" data-vibe="mindbending">🧠 Mind-Bending</button>
+        <button class="chip" data-vibe="intense">⚡ Pure Adrenaline</button>
+        <button class="chip" data-vibe="funny">😂 Laugh Out Loud</button>
+        <button class="chip" data-vibe="dark">🔪 Dark &amp; Gritty</button>
+        <button class="chip" data-vibe="feelgood">💖 Feel Good</button>
+        <button class="chip" data-vibe="scary">👻 Spine-Chilling</button>
+        <button class="chip" data-vibe="epic">⚔️ Epic Journey</button>
+      </div>
+
+      <!-- TYPE -->
+      <div class="chip-group" data-group="type">
+        <span class="chip-group-label">Type</span>
+        <button class="chip active" data-type="movie">Movies</button>
+        <button class="chip" data-type="tv">Series</button>
+      </div>
+
+      <!-- ERA -->
+      <div class="chip-group" data-group="era">
+        <span class="chip-group-label">Era</span>
+        <button class="chip active" data-era="all">All Time</button>
+        <button class="chip" data-era="2020s">2020s (Modern)</button>
+        <button class="chip" data-era="2010s">2010s</button>
+        <button class="chip" data-era="2000s">2000s Classics</button>
+        <button class="chip" data-era="classic">90s &amp; Earlier</button>
+      </div>
+
+      <!-- QUALITY / CROWD FEEL -->
+      <div class="chip-group" data-group="quality">
+        <span class="chip-group-label">Feel</span>
+        <button class="chip active" data-quality="bangers">🔥 Verified Bangers (★ 7.5+)</button>
+        <button class="chip" data-quality="acclaimed">🏆 Masterpieces (★ 8.0+)</button>
+        <button class="chip" data-quality="gems">💎 Hidden Gems</button>
+        <button class="chip" data-quality="popular">🌟 Most Popular</button>
+      </div>
+
+      <div class="explore-actions">
+        <button class="btn-explore" id="btn-explore-submit">🔍 Find Bangers</button>
+        <button class="btn-more" id="btn-explore-surprise">🎲 Surprise Me</button>
+      </div>
+    </div>
+
+    <!-- RESULTS -->
+    <div class="section">
+      <div id="explore-result-count" class="explore-result-count"></div>
+      <div id="explore-results" class="explore-results"></div>
+      <button id="explore-load-more" class="btn-load-more" style="display:none">Load More</button>
     </div>
   </div>
 
