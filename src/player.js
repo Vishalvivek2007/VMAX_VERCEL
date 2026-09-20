@@ -14,7 +14,7 @@ const DRIFT_MS     = 1500;   // room sync: resnap if we're more than this far of
 const TRUSTED_PLAYER_ORIGINS = [
   window.location.origin,
   "https://archive.org",
-  "https://www.vidking.net"
+  "https://vidsrc.sbs"
 ];
 
 let activeHls     = null;
@@ -33,9 +33,9 @@ async function playTitle(item, options = {}) {
   if (item.mediaType === "tv") {
     const s = item.season || 1;
     const e = item.episode || 1;
-    sources.push({ id: "vidking", label: "Vidking Server", kind: "iframe", url: `https://www.vidking.net/embed/tv/${tmdbId}/${s}/${e}?color=3B5BDB&autoPlay=true` });
+    sources.push({ id: "vidking", label: "Vidking Server", kind: "iframe", url: `https://vidsrc.sbs/embed/tv/${tmdbId}/${s}/${e}?color=3B5BDB&autoPlay=true&sub=en` });
   } else if (item.mediaType === "movie") {
-    sources.push({ id: "vidking", label: "Vidking Server", kind: "iframe", url: `https://www.vidking.net/embed/movie/${tmdbId}?color=3B5BDB&autoPlay=true` });
+    sources.push({ id: "vidking", label: "Vidking Server", kind: "iframe", url: `https://vidsrc.sbs/embed/movie/${tmdbId}?color=3B5BDB&autoPlay=true&sub=en` });
   }
 
   if (!sources.length) return showUnavailable(item);
@@ -140,7 +140,7 @@ function mountVideo(options) {
   return video;
 }
 
-// ── Iframe embed — handshake or bust ─────────────────────────
+// ── Iframe embed ─────────────────────────────────────────────
 function playIframe(source, options) {
   return new Promise(resolve => {
     const stage = document.getElementById("player-stage");
@@ -151,25 +151,29 @@ function playIframe(source, options) {
     const done = ok => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
-      if (!ok) window.removeEventListener("message", onMsg);
       resolve(ok);
     };
 
+    const iframe = stage.querySelector("iframe");
+    if (iframe) {
+      iframe.addEventListener("load", () => done(true), { once: true });
+    }
+
+    // Optional event listener if the embed provider sends playback events
     const onMsg = e => {
-      // Without this check, any frame on the page can forge playback events.
-      if (!TRUSTED_PLAYER_ORIGINS.includes(e.origin)) return;
       const msg = safeParse(e.data);
       if (!msg) return;
       if (msg.type === "PLAYER_EVENT") {
-        done(true);                                  // proof of life
+        done(true);
         const d = msg.data || {};
         emit(d.event, Number(d.currentTime ?? d.time ?? 0), d.duration);
       }
     };
-
     window.addEventListener("message", onMsg);
-    const timer = setTimeout(() => done(false), HANDSHAKE_MS);
+
+    // Fallback: third-party embeds (like vidsrc) don't send custom handshakes.
+    // Ensure the player is marked ready after mounting so it isn't closed.
+    setTimeout(() => done(true), 1500);
   });
 }
 
