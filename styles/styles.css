@@ -929,19 +929,28 @@ nav {
 .continue-card { position: relative; }
 .continue-progress {
   position: absolute; left: 0; right: 0; bottom: 0;
-  height: 3px; background: rgba(0,0,0,0.6);
+  height: 4px; background: rgba(0,0,0,0.75);
+  z-index: 5;
 }
-.continue-progress-fill { height: 100%; background: #3B5BDB; }
+.continue-progress-fill {
+  height: 100%; background: #3B5BDB;
+  border-radius: 0 2px 2px 0;
+  transition: width 0.3s ease;
+}
 .continue-remaining {
   font-size: 11px; color: #7B93F5;
 }
 .continue-remove {
   position: absolute; top: 8px; left: 8px;
-  width: 24px; height: 24px; border-radius: 50%;
+  width: 26px; height: 26px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
-  background: rgba(0,0,0,0.7); color: #fff;
-  font-size: 14px; line-height: 1; cursor: pointer;
-  opacity: 0; transition: opacity 0.2s;
+  background: rgba(0,0,0,0.75); color: #fff;
+  font-size: 13px; line-height: 1; cursor: pointer;
+  opacity: 0; transition: opacity 0.2s, background 0.15s;
+  z-index: 10;
+}
+.continue-remove:hover {
+  background: rgba(220,53,69,0.9);
 }
 .card:hover .continue-remove { opacity: 1; }
 

@@ -21,6 +21,9 @@ let activeHls     = null;
 let activeSource  = null;
 let activeItem    = null;
 let onPlayerEvent = null;   // set by the room-sync layer
+let iframeProgressInterval = null;
+let currentPlaybackTime    = 0;
+let playbackDuration       = 7200;
 
 // ── Entry point ──────────────────────────────────────────────
 async function playTitle(item, options = {}) {
@@ -29,13 +32,15 @@ async function playTitle(item, options = {}) {
 
   const sources = [];
   const tmdbId = item.movieId;
+  const startTime = Math.floor(Number(options.currentTime) || 0);
+  const timeParam = startTime > 0 ? `&t=${startTime}` : "";
   
   if (item.mediaType === "tv") {
     const s = item.season || 1;
     const e = item.episode || 1;
-    sources.push({ id: "vidking", label: "Vidking Server", kind: "iframe", url: `https://vidsrc.sbs/embed/tv/${tmdbId}/${s}/${e}?color=3B5BDB&autoPlay=true&sub=en` });
+    sources.push({ id: "vidking", label: "Vidking Server", kind: "iframe", url: `https://vidsrc.sbs/embed/tv/${tmdbId}/${s}/${e}?color=3B5BDB&autoPlay=true&sub=en${timeParam}` });
   } else if (item.mediaType === "movie") {
-    sources.push({ id: "vidking", label: "Vidking Server", kind: "iframe", url: `https://vidsrc.sbs/embed/movie/${tmdbId}?color=3B5BDB&autoPlay=true&sub=en` });
+    sources.push({ id: "vidking", label: "Vidking Server", kind: "iframe", url: `https://vidsrc.sbs/embed/movie/${tmdbId}?color=3B5BDB&autoPlay=true&sub=en${timeParam}` });
   }
 
   if (!sources.length) return showUnavailable(item);
@@ -163,16 +168,42 @@ function playIframe(source, options) {
     const onMsg = e => {
       const msg = safeParse(e.data);
       if (!msg) return;
-      if (msg.type === "PLAYER_EVENT") {
+      if (msg.type === "PLAYER_EVENT" || msg.event === "timeupdate" || typeof msg.currentTime === "number") {
         done(true);
-        const d = msg.data || {};
-        emit(d.event, Number(d.currentTime ?? d.time ?? 0), d.duration);
+        const d = msg.data || msg;
+        const cur = Number(d.currentTime ?? d.time ?? d.seconds ?? 0);
+        const dur = Number(d.duration ?? d.total ?? playbackDuration);
+        if (cur > 0) currentPlaybackTime = cur;
+        if (dur > 0) playbackDuration = dur;
+        emit("timeupdate", currentPlaybackTime, playbackDuration);
       }
     };
     window.addEventListener("message", onMsg);
 
-    // Fallback: third-party embeds (like vidsrc) don't send custom handshakes.
-    // Ensure the player is marked ready after mounting so it isn't closed.
+    // Setup elapsed time tracking for Continue Watching
+    const startTime = Math.floor(Number(options.currentTime) || 0);
+    currentPlaybackTime = startTime;
+    playbackDuration = activeItem?.duration || (activeItem?.mediaType === "tv" ? 2700 : 7200);
+
+    if (iframeProgressInterval) clearInterval(iframeProgressInterval);
+
+    // Initial ping after 2 seconds to register the title into continue watching
+    setTimeout(() => {
+      if (activeItem) {
+        currentPlaybackTime = Math.max(currentPlaybackTime, 15);
+        emit("timeupdate", currentPlaybackTime, playbackDuration);
+      }
+    }, 2000);
+
+    // Continuous tick every 3 seconds while watching
+    const wallStart = Date.now();
+    iframeProgressInterval = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - wallStart) / 1000);
+      currentPlaybackTime = startTime + elapsed;
+      emit("timeupdate", currentPlaybackTime, playbackDuration);
+    }, 3000);
+
+    // Fallback: mark ready after mounting so it isn't closed
     setTimeout(() => done(true), 1500);
   });
 }
@@ -246,9 +277,19 @@ function showUnavailable(item, tried = []) {
 function closePlayer() {
   teardown();
   closeModal();
+  if (typeof renderContinueWatching === "function") {
+    renderContinueWatching();
+  }
 }
 
 function teardown() {
+  if (iframeProgressInterval) {
+    clearInterval(iframeProgressInterval);
+    iframeProgressInterval = null;
+  }
+  if (activeItem && currentPlaybackTime >= 10) {
+    emit("pause", currentPlaybackTime, playbackDuration);
+  }
   if (activeHls) { activeHls.destroy(); activeHls = null; }
   const stage = document.getElementById("player-stage");
   if (stage) stage.innerHTML = "";

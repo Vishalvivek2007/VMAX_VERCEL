@@ -67,18 +67,18 @@ const localHistory = {
 
   list() {
     return this._read()
-      .filter(i => i.percent >= 2 && i.percent < 90)
+      .filter(i => (i.position >= 10 || i.percent >= 0.5) && i.percent < 95)
       .sort((a, b) => b.updatedAt - a.updatedAt)
       .slice(0, 20);
   },
 
   remove(tmdbId) {
-    this._write(this._read().filter(i => i.tmdbId !== tmdbId));
+    this._write(this._read().filter(i => Number(i.tmdbId) !== Number(tmdbId)));
   },
 
   get(tmdbId, season, episode) {
     return this._read().find(i =>
-      i.tmdbId === tmdbId &&
+      Number(i.tmdbId) === Number(tmdbId) &&
       (i.season ?? null) === (season ?? null) &&
       (i.episode ?? null) === (episode ?? null)
     ) || null;
@@ -368,12 +368,13 @@ async function renderContinueWatching() {
     return `
       <div class="card continue-card" data-id="${it.tmdbId}" data-type="${esc(it.mediaType)}"
            data-season="${it.season || 1}" data-episode="${it.episode || 1}"
-           data-position="${it.position}" data-title="${esc(it.title || "")}">
+           data-position="${it.position}" data-title="${esc(it.title || "")}"
+           data-poster="${esc(it.posterPath || "")}">
         <div class="continue-remove" data-remove="${it.tmdbId}" title="Remove">✕</div>
         <img class="card-poster" src="${it.posterPath ? IMG_BASE + esc(it.posterPath) : PLACEHOLDER}"
              alt="${esc(label)}" loading="lazy">
         <div class="continue-progress">
-          <div class="continue-progress-fill" style="width:${Math.min(100, it.percent).toFixed(1)}%"></div>
+          <div class="continue-progress-fill" style="width:${Math.min(100, Math.max(3, it.percent)).toFixed(1)}%"></div>
         </div>
         <div class="card-info">
           <div class="card-title">${esc(label)}</div>
@@ -390,6 +391,7 @@ async function renderContinueWatching() {
         movieId:   +card.dataset.id,
         title:     card.dataset.title,
         mediaType: card.dataset.type,
+        posterPath: card.dataset.poster || null,
         season:    +card.dataset.season,
         episode:   +card.dataset.episode
       }, { currentTime: +card.dataset.position, autoplay: true });
@@ -717,16 +719,17 @@ onPlayerEvent = ({ event, currentTime, duration, item }) => {
     status.textContent = { play: "▶ Playing", pause: "⏸ Paused", ended: "✓ Finished" }[event] || "";
   }
 
-  saveProgress(item, currentTime, duration);
+  const isImmediate = event === "pause" || event === "ended" || event === "play";
+  saveProgress(item, currentTime, duration, isImmediate);
 };
 
 // Persist watch position — this is what Continue Watching reads.
 // Always writes to localStorage (works without login).
-// Also syncs to server when authenticated. Throttled to one write per 10s.
+// Also syncs to server when authenticated. Throttled to one write per 3s.
 let lastProgressWrite = 0;
-function saveProgress(item, currentTime, duration) {
+function saveProgress(item, currentTime, duration, force = false) {
   if (!item?.movieId || !currentTime || !duration) return;
-  if (Date.now() - lastProgressWrite < 10_000) return;
+  if (!force && Date.now() - lastProgressWrite < 3_000) return;
   lastProgressWrite = Date.now();
 
   // Always save locally
