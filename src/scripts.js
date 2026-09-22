@@ -40,7 +40,8 @@ const localHistory = {
     localStorage.setItem(HISTORY_KEY, JSON.stringify(items.slice(0, HISTORY_MAX)));
   },
   _key(it) {
-    return `${it.tmdbId}:${it.season ?? ""}:${it.episode ?? ""}`;
+    const id = it.tmdbId ?? it.movieId;
+    return it.mediaType === "tv" ? `tv:${id}` : `movie:${id}`;
   },
 
   save(item) {
@@ -182,11 +183,25 @@ function switchSection(section) {
     a.classList.toggle("active", a.dataset.section === section);
   });
 
-  document.getElementById("hero-section").style.display    = (section === "home" || section === "movies") ? "" : "none";
-  document.getElementById("movies-sections").style.display = (section === "home" || section === "movies") ? "" : "none";
+  const showHero = (section === "home" || section === "movies");
+  document.getElementById("hero-section").style.display    = showHero ? "" : "none";
+  document.body.classList.toggle("no-hero", !showHero);
+
+  document.getElementById("movies-sections").style.display = showHero ? "" : "none";
   document.getElementById("series-sections").style.display = section === "series" ? "" : "none";
   document.getElementById("explore-section").style.display = section === "explore" ? "" : "none";
   document.getElementById("watchlist-section").style.display = section === "watchlist" ? "" : "none";
+
+  // Continue watching visible on Home, Movies, and Series
+  const continueSec = document.getElementById("continue-section");
+  if (continueSec) {
+    const showContinue = (section === "home" || section === "movies" || section === "series");
+    if (!showContinue) {
+      continueSec.style.display = "none";
+    } else {
+      renderContinueWatching();
+    }
+  }
 
   if (section === "series" && !seriesLoaded) loadSeries();
   if (section === "explore" && !exploreLoaded) runVibeSearch();
@@ -341,10 +356,10 @@ async function renderContinueWatching() {
   if (authToken) {
     try {
       const { items: serverItems = [] } = await api("GET", "/history/continue");
-      // Merge: server wins on conflict (by tmdbId+season+episode key)
-      const localMap = new Map(items.map(i => [`${i.tmdbId}:${i.season}:${i.episode}`, i]));
+      // Merge: server wins on conflict (by mediaType+tmdbId key)
+      const localMap = new Map(items.map(i => [localHistory._key(i), i]));
       for (const si of serverItems) {
-        const key = `${si.tmdbId}:${si.season}:${si.episode}`;
+        const key = localHistory._key(si);
         const li = localMap.get(key);
         if (!li || new Date(si.updatedAt).getTime() > (li.updatedAt || 0)) {
           localMap.set(key, si);
@@ -609,7 +624,7 @@ async function openTVModal(tvId) {
       <!-- Season / Episode Picker -->
       <div class="episode-picker">
         <div class="picker-row">
-          <select class="season-select" id="season-select" onchange="loadEpisodes(${tvId}, '${tvPoster}')">
+          <select class="season-select" id="season-select" onchange="loadEpisodes(${tvId}, '${details.name.replace(/'/g,"\\'")}', '${tvPoster}')">
             ${seasonOpts}
           </select>
           <select class="episode-select" id="episode-select">
@@ -634,10 +649,10 @@ async function openTVModal(tvId) {
     </div>`;
 
   // Auto-load season 1 episodes
-  if (seasons.length) loadEpisodes(tvId, tvPoster);
+  if (seasons.length) loadEpisodes(tvId, details.name, tvPoster);
 }
 
-async function loadEpisodes(tvId, tvPoster = "") {
+async function loadEpisodes(tvId, showName = "", tvPoster = "") {
   const seasonNum = +document.getElementById("season-select").value;
   const grid      = document.getElementById("episodes-grid");
   const epSelect  = document.getElementById("episode-select");
@@ -653,7 +668,7 @@ async function loadEpisodes(tvId, tvPoster = "") {
 
   // Render episode cards
   grid.innerHTML = eps.map(ep => `
-    <div class="episode-card" onclick="openPlayerTV(${tvId}, '${ep.name.replace(/'/g,"\\'")}', ${seasonNum}, ${ep.episode_number}, '${tvPoster || ep.still_path || ""}')">
+    <div class="episode-card" onclick="openPlayerTV(${tvId}, '${showName.replace(/'/g,"\\'")}', ${seasonNum}, ${ep.episode_number}, '${tvPoster || ep.still_path || ""}')">
       <div class="ep-thumb-wrap">
         ${ep.still_path
           ? `<img class="ep-thumb" src="${IMG_BASE}${ep.still_path}" loading="lazy">`
@@ -683,7 +698,141 @@ function openPlayer(movieId, title, mediaType = "movie", posterPath = null) {
 }
 
 function openPlayerTV(tvId, showName, season, episode, posterPath = null) {
-  openRoomPlayer({ movieId: tvId, title: showName, mediaType: "tv", posterPath, season, episode });
+  openRoomPlayer({ movieId: tvId, title: showName, mediaType: "tv", posterPath, season: +season, episode: +episode });
+}
+
+// ── IN-PLAYER EPISODE SWITCHING ──────────────────────────────
+// Allows switching episodes without closing the player modal.
+let _episodeSwitching = false;
+async function switchEpisode(delta) {
+  if (_episodeSwitching) return;
+  if (!currentPlayer || currentPlayer.mediaType !== "tv") return;
+
+  _episodeSwitching = true;
+  const btn = delta > 0 ? document.getElementById("ep-next") : document.getElementById("ep-prev");
+  if (btn) { btn.disabled = true; btn.style.opacity = "0.5"; }
+
+  try {
+    const tvId    = currentPlayer.movieId;
+    let season    = currentPlayer.season;
+    let episode   = currentPlayer.episode + delta;
+
+    // Fetch current season info to know episode count
+    const seasonData = await tmdb(`/tv/${tvId}/season/${season}`);
+    const epCount    = (seasonData.episodes || []).length;
+
+    if (episode > epCount) {
+      // Try next season
+      const showData = await tmdb(`/tv/${tvId}`);
+      const maxSeason = Math.max(...(showData.seasons || []).filter(s => s.season_number > 0).map(s => s.season_number));
+      if (season < maxSeason) {
+        season++;
+        episode = 1;
+      } else {
+        showToast("You've reached the last episode!");
+        return;
+      }
+    } else if (episode < 1) {
+      // Try previous season
+      if (season > 1) {
+        season--;
+        const prevSeason = await tmdb(`/tv/${tvId}/season/${season}`);
+        episode = (prevSeason.episodes || []).length;
+      } else {
+        showToast("You're on the first episode!");
+        return;
+      }
+    }
+
+    // Save progress for current episode before switching
+    if (activeItem && currentPlaybackTime >= 10) {
+      emit("pause", currentPlaybackTime, playbackDuration);
+    }
+
+    // Play the new episode
+    openPlayerTV(tvId, currentPlayer.title, season, episode, currentPlayer.posterPath);
+  } catch (err) {
+    showToast("Couldn't switch episode. Try again.");
+  } finally {
+    _episodeSwitching = false;
+    if (btn) { btn.disabled = false; btn.style.opacity = ""; }
+  }
+}
+
+// ── IN-PLAYER EPISODE DRAWER ─────────────────────────────────
+async function togglePlayerEpDrawer() {
+  const drawer = document.getElementById("player-ep-drawer");
+  if (!drawer) return;
+
+  if (drawer.style.display !== "none") {
+    drawer.style.display = "none";
+    return;
+  }
+
+  drawer.style.display = "block";
+  drawer.innerHTML = `<div style="color:#777;font-size:12px;padding:10px;text-align:center">Loading episodes…</div>`;
+
+  if (!currentPlayer || currentPlayer.mediaType !== "tv") return;
+
+  try {
+    const show = await tmdb(`/tv/${currentPlayer.movieId}`);
+    const seasons = (show.seasons || []).filter(s => s.season_number > 0);
+    const currentSeason = currentPlayer.season || 1;
+
+    const seasonOpts = seasons.map(s =>
+      `<option value="${s.season_number}" ${s.season_number === currentSeason ? "selected" : ""}>
+        Season ${s.season_number} (${s.episode_count} eps)
+      </option>`
+    ).join("");
+
+    drawer.innerHTML = `
+      <div class="ep-drawer-header">
+        <span style="font-size:12px;font-weight:700;color:#aaa">Select Episode</span>
+        <select onchange="renderDrawerEpisodes(this.value)">${seasonOpts}</select>
+      </div>
+      <div class="ep-drawer-grid" id="ep-drawer-grid"></div>`;
+
+    await renderDrawerEpisodes(currentSeason);
+  } catch (err) {
+    drawer.innerHTML = `<div style="color:#e05252;font-size:12px;padding:8px">Failed to load episodes.</div>`;
+  }
+}
+
+async function renderDrawerEpisodes(seasonNum) {
+  const grid = document.getElementById("ep-drawer-grid");
+  if (!grid || !currentPlayer) return;
+
+  grid.innerHTML = `<div style="color:#777;font-size:12px;grid-column:1/-1">Loading season ${seasonNum}…</div>`;
+
+  try {
+    const data = await tmdb(`/tv/${currentPlayer.movieId}/season/${seasonNum}`);
+    const eps = data.episodes || [];
+
+    grid.innerHTML = eps.map(e => {
+      const isCur = Number(currentPlayer.season) === Number(seasonNum) && Number(currentPlayer.episode) === Number(e.episode_number);
+      return `
+        <button class="ep-drawer-item ${isCur ? "active" : ""}"
+                onclick="selectDrawerEpisode(${seasonNum}, ${e.episode_number})"
+                title="${esc(e.name)}">
+          <strong>E${e.episode_number}</strong>: ${esc(e.name || `Episode ${e.episode_number}`)}
+        </button>`;
+    }).join("");
+  } catch {
+    grid.innerHTML = `<div style="color:#e05252;font-size:12px;grid-column:1/-1">Failed to load episodes.</div>`;
+  }
+}
+
+function selectDrawerEpisode(season, episode) {
+  if (!currentPlayer) return;
+  const drawer = document.getElementById("player-ep-drawer");
+  if (drawer) drawer.style.display = "none";
+
+  if (activeItem && currentPlaybackTime >= 10) {
+    emit("pause", currentPlaybackTime, playbackDuration);
+  }
+
+  showToast(`Playing Season ${season} Episode ${episode}`);
+  openPlayerTV(currentPlayer.movieId, currentPlayer.title, season, episode, currentPlayer.posterPath);
 }
 
 function openRoomPlayer(item, options = {}) {
@@ -1096,9 +1245,16 @@ async function runVibeSearch(page = 1, isSurprise = false) {
 // ── TABS ─────────────────────────────────────────────────────
 document.querySelectorAll(".section-tabs").forEach(tabs => {
   tabs.querySelectorAll(".tab").forEach(tab => {
-    tab.addEventListener("click", () => {
+    tab.addEventListener("click", async () => {
       tabs.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
       tab.classList.add("active");
+
+      const type = tab.textContent.trim().toLowerCase();
+      if (type === "movies" || type === "series") {
+        const isMovie = type === "movies";
+        const data = await tmdb(isMovie ? "/trending/movie/day" : "/trending/tv/day");
+        renderRow("trending-row", data, isMovie ? "movie" : "tv");
+      }
     });
   });
 });

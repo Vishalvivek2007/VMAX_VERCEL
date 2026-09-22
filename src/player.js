@@ -1,4 +1,4 @@
-// ── VMAX PLAYER ──────────────────────────────────────────────
+// ── VMAXX PLAYER ──────────────────────────────────────────────
 // Walks the ranked source list from /api/sources until one actually plays.
 //
 // The core problem this solves: a cross-origin iframe that 404s still fires
@@ -180,6 +180,8 @@ function playIframe(source, options) {
     };
     window.addEventListener("message", onMsg);
 
+    // Fallback: third-party embeds (like vidsrc) don't send custom handshakes.
+    // Ensure the player is marked ready after mounting so it isn't closed.
     // Setup elapsed time tracking for Continue Watching
     const startTime = Math.floor(Number(options.currentTime) || 0);
     currentPlaybackTime = startTime;
@@ -224,11 +226,29 @@ function showShell(item, status = "") {
     ? `${item.title} — S${String(item.season).padStart(2, "0")}E${String(item.episode).padStart(2, "0")}`
     : item.title;
 
+  const epNav = item.mediaType === "tv" ? `
+    <div class="player-ep-nav" id="player-ep-nav">
+      <button class="ep-nav-btn" id="ep-prev" onclick="switchEpisode(-1)" title="Previous Episode">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z" transform="scale(-1,1) translate(-24,0)"/></svg>
+        <span>Prev Ep</span>
+      </button>
+      <button class="ep-nav-current ep-nav-dropdown-btn" id="ep-drawer-toggle" onclick="togglePlayerEpDrawer()" title="View all episodes">
+        <span id="ep-nav-label">S${String(item.season).padStart(2, "0")}E${String(item.episode).padStart(2, "0")}</span>
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+      </button>
+      <button class="ep-nav-btn" id="ep-next" onclick="switchEpisode(1)" title="Next Episode">
+        <span>Next Ep</span>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
+      </button>
+    </div>
+    <div class="player-ep-drawer" id="player-ep-drawer" style="display:none"></div>` : "";
+
   modal.classList.add("open");
   modalBody.innerHTML = `
     <button class="modal-close" onclick="closePlayer()">✕</button>
     <div class="player-title">${esc(title || "Now Playing")}</div>
     <div id="player-stage" class="player-stage"></div>
+    ${epNav}
     <div id="source-picker" class="source-picker"></div>
     <div id="player-status" class="player-status">${esc(status)}</div>`;
 }
