@@ -40,9 +40,8 @@ const localHistory = {
     localStorage.setItem(HISTORY_KEY, JSON.stringify(items.slice(0, HISTORY_MAX)));
   },
   _key(it) {
-    return `${it.tmdbId}:${it.season ?? ""}:${it.episode ?? ""}`;
     const id = it.tmdbId ?? it.movieId;
-    return it.mediaType === "tv" ? `tv:${id}` : `movie:${id}`;
+    return it.mediaType === "tv" ? ("tv:" + id) : ("movie:" + id);
   },
 
   save(item) {
@@ -69,23 +68,20 @@ const localHistory = {
 
   list() {
     return this._read()
-      .filter(i => i.percent >= 2 && i.percent < 90)
       .filter(i => (i.position >= 10 || i.percent >= 0.5) && i.percent < 95)
       .sort((a, b) => b.updatedAt - a.updatedAt)
       .slice(0, 20);
   },
 
   remove(tmdbId) {
-    this._write(this._read().filter(i => i.tmdbId !== tmdbId));
     this._write(this._read().filter(i => Number(i.tmdbId) !== Number(tmdbId)));
   },
 
   get(tmdbId, season, episode) {
     return this._read().find(i =>
-      i.tmdbId === tmdbId &&
       Number(i.tmdbId) === Number(tmdbId) &&
-      (i.season ?? null) === (season ?? null) &&
-      (i.episode ?? null) === (episode ?? null)
+      (season == null || (i.season ?? null) === (season ?? null)) &&
+      (episode == null || (i.episode ?? null) === (episode ?? null))
     ) || null;
   }
 };
@@ -139,6 +135,17 @@ async function init() {
   initNavLinks();
   initExplore();
   initDelegatedHandlers();
+
+  // Netflix-style sticky navbar background on scroll
+  window.addEventListener("scroll", () => {
+    const nav = document.getElementById("main-nav");
+    if (nav) nav.classList.toggle("scrolled", window.scrollY > 30);
+  }, { passive: true });
+
+  // Refresh Continue Watching whenever tab gains focus
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) renderContinueWatching();
+  });
   if (authToken) await loadWatchlist();   // so hearts render correctly on first paint
 
   const [trending, popular, nowPlaying, action, scifi, comedy, topRated, horror] =
@@ -236,25 +243,32 @@ async function loadSeries() {
 
 // ── HERO ─────────────────────────────────────────────────────
 function buildHero(movie, mediaType) {
-  if (!movie?.id) return;   // TMDB row failed — leave the hero in its loading state
+  if (!movie?.id) return;
 
   const bg = document.querySelector(".hero-bg-fill");
-  bg.style.cssText = `
-    background-image:
-      linear-gradient(to right, rgba(11,11,15,.92) 30%, rgba(11,11,15,.3) 80%),
-      linear-gradient(to top,   rgba(11,11,15,1)  0%,  transparent 50%),
-      url(${IMG_ORIG}${movie.backdrop_path});
-    background-size: cover;
-    background-position: center top;
-  `;
+  if (bg && movie.backdrop_path) {
+    bg.style.backgroundImage = 'url(' + IMG_ORIG + movie.backdrop_path + ')';
+  }
   const title = movie.title || movie.name || "Untitled";
-  document.querySelector(".hero-title").textContent = title;
-  document.querySelector(".hero-desc").textContent  = movie.overview || "";
-  document.querySelector(".hero-rating").textContent =
-    `★ ${Number.isFinite(movie.vote_average) ? movie.vote_average.toFixed(1) : "—"}`;
-  document.querySelector(".btn-play").onclick = () => openPlayer(movie.id, title, mediaType);
-  document.querySelector(".btn-play").onclick = () => openPlayer(movie.id, title, mediaType, movie.poster_path);
-  document.querySelector(".btn-more").onclick = () => openModal(movie.id, mediaType);
+  const year = (movie.release_date || movie.first_air_date || "").slice(0, 4);
+  const rating = Number.isFinite(movie.vote_average) ? movie.vote_average.toFixed(1) : "—";
+
+  const titleEl = document.querySelector(".hero-title");
+  if (titleEl) titleEl.textContent = title;
+
+  const descEl = document.querySelector(".hero-desc");
+  if (descEl) descEl.textContent = movie.overview || "";
+
+  const ratingEl = document.querySelector(".hero-rating");
+  if (ratingEl) {
+    ratingEl.innerHTML = '★ ' + rating + (year ? ' <span class="hero-year">· ' + year + '</span>' : '') + ' <span class="hero-hd-badge">HD</span>';
+  }
+
+  const playBtn = document.querySelector(".btn-play");
+  if (playBtn) playBtn.onclick = () => openPlayer(movie.id, title, mediaType, movie.poster_path);
+
+  const moreBtn = document.querySelector(".btn-more");
+  if (moreBtn) moreBtn.onclick = () => openModal(movie.id, mediaType);
 }
 
 // ── RENDER HELPERS ───────────────────────────────────────────
@@ -355,14 +369,11 @@ async function renderContinueWatching() {
   const section = document.getElementById("continue-section");
   if (!section) return;
 
-  // Get local items (always available)
   let items = localHistory.list();
 
-  // Merge with server items if logged in
   if (authToken) {
     try {
       const { items: serverItems = [] } = await api("GET", "/history/continue");
-      // Merge: server wins on conflict (per title key)
       const localMap = new Map(items.map(i => [localHistory._key(i), i]));
       for (const si of serverItems) {
         const key = localHistory._key(si);
@@ -377,57 +388,74 @@ async function renderContinueWatching() {
     } catch { /* server unavailable — use local only */ }
   }
 
-  if (!items.length) { section.style.display = "none"; return; }
+  if (!items.length) {
+    section.style.display = "none";
+    return;
+  }
 
   section.style.display = "";
-  document.getElementById("continue-row").innerHTML = items.map(it => {
-    const left = Math.max(0, Math.round((it.duration - it.position) / 60));
-    const label = it.mediaType === "tv" && it.season
-      ? `${it.title || "Episode"} · S${it.season}E${it.episode}`
-      : (it.title || "Untitled");
+  const row = document.getElementById("continue-row");
+  if (!row) return;
 
-    return `
-      <div class="card continue-card" data-id="${it.tmdbId}" data-type="${esc(it.mediaType)}"
-           data-season="${it.season || 1}" data-episode="${it.episode || 1}"
-           data-position="${it.position}" data-title="${esc(it.title || "")}">
-           data-position="${it.position}" data-title="${esc(it.title || "")}"
-           data-poster="${esc(it.posterPath || "")}">
-        <div class="continue-remove" data-remove="${it.tmdbId}" title="Remove">✕</div>
-        <img class="card-poster" src="${it.posterPath ? IMG_BASE + esc(it.posterPath) : PLACEHOLDER}"
-             alt="${esc(label)}" loading="lazy">
-        <div class="continue-progress">
-          <div class="continue-progress-fill" style="width:${Math.min(100, it.percent).toFixed(1)}%"></div>
-          <div class="continue-progress-fill" style="width:${Math.min(100, Math.max(3, it.percent)).toFixed(1)}%"></div>
-        </div>
-        <div class="card-info">
-          <div class="card-title">${esc(label)}</div>
-          <div class="card-meta"><span class="continue-remaining">${left} min left</span></div>
-        </div>
-      </div>`;
+  row.innerHTML = items.map(it => {
+    const leftMin = Math.max(0, Math.round((it.duration - it.position) / 60));
+    const leftStr = leftMin > 0 ? (leftMin + "m left") : "Almost done";
+    const isTV = it.mediaType === "tv";
+    const epBadge = isTV && it.season ? ("S" + it.season + ":E" + it.episode) : "";
+    const displayTitle = it.title || "Untitled";
+    const pct = Math.min(100, Math.max(3, it.percent || 0)).toFixed(1);
+    const posterSrc = it.posterPath ? (IMG_BASE + esc(it.posterPath)) : PLACEHOLDER;
+
+    return '<div class="card continue-card" ' +
+      'data-id="' + it.tmdbId + '" ' +
+      'data-type="' + esc(it.mediaType) + '" ' +
+      'data-season="' + (it.season || 1) + '" ' +
+      'data-episode="' + (it.episode || 1) + '" ' +
+      'data-position="' + (it.position || 0) + '" ' +
+      'data-title="' + esc(displayTitle) + '" ' +
+      'data-poster="' + esc(it.posterPath || "") + '">' +
+      '<button class="continue-remove" data-remove="' + it.tmdbId + '" title="Remove from Continue Watching" aria-label="Remove">✕</button>' +
+      '<div class="continue-thumb-wrap">' +
+        '<img class="card-poster continue-poster" src="' + posterSrc + '" alt="' + esc(displayTitle) + '" loading="lazy">' +
+        '<div class="continue-play-overlay">' +
+          '<div class="continue-play-btn">' +
+            '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>' +
+          '</div>' +
+        '</div>' +
+        '<div class="continue-progress">' +
+          '<div class="continue-progress-fill" style="width:' + pct + '%"></div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="card-info">' +
+        '<div class="card-title">' + esc(displayTitle) + '</div>' +
+        '<div class="continue-meta">' +
+          (epBadge ? '<span class="continue-ep-badge">' + esc(epBadge) + '</span>' : '') +
+          '<span class="continue-remaining">' + leftStr + '</span>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
   }).join("");
 
-  document.querySelectorAll("#continue-row .continue-card").forEach(card => {
+  row.querySelectorAll(".continue-card").forEach(card => {
     card.addEventListener("click", e => {
       if (e.target.closest("[data-remove]")) return;
-      // Resume exactly where they stopped.
       openRoomPlayer({
-        movieId:   +card.dataset.id,
-        title:     card.dataset.title,
-        mediaType: card.dataset.type,
+        movieId:    +card.dataset.id,
+        title:      card.dataset.title,
+        mediaType:  card.dataset.type,
         posterPath: card.dataset.poster || null,
-        season:    +card.dataset.season,
-        episode:   +card.dataset.episode
+        season:     +card.dataset.season,
+        episode:    +card.dataset.episode
       }, { currentTime: +card.dataset.position, autoplay: true });
     });
   });
 
-  document.querySelectorAll("#continue-row [data-remove]").forEach(btn => {
+  row.querySelectorAll("[data-remove]").forEach(btn => {
     btn.addEventListener("click", async e => {
       e.stopPropagation();
-      // Remove from local storage
-      localHistory.remove(+btn.dataset.remove);
-      // Also remove from server if logged in
-      if (authToken) await api("DELETE", `/history/${btn.dataset.remove}`);
+      const id = +btn.dataset.remove;
+      localHistory.remove(id);
+      if (authToken) await api("DELETE", "/history/" + id);
       renderContinueWatching();
     });
   });
@@ -857,7 +885,7 @@ function openRoomPlayer(item, options = {}) {
   // Auto-resume from local history if no explicit currentTime given
   if (!options.currentTime) {
     const saved = localHistory.get(normalized.movieId, normalized.season, normalized.episode);
-    if (saved && saved.percent >= 2 && saved.percent < 90) {
+    if (saved && (saved.position >= 10 || saved.percent >= 0.5) && saved.percent < 95) {
       options.currentTime = saved.position;
       options.autoplay = true;
     }
@@ -876,7 +904,6 @@ onPlayerEvent = ({ event, currentTime, duration, item }) => {
     status.textContent = { play: "▶ Playing", pause: "⏸ Paused", ended: "✓ Finished" }[event] || "";
   }
 
-  saveProgress(item, currentTime, duration);
   const isImmediate = event === "pause" || event === "ended" || event === "play";
   saveProgress(item, currentTime, duration, isImmediate);
 };

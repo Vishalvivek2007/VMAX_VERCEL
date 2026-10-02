@@ -369,3 +369,9 @@ function safeParse(data) {
   if (typeof data === "object") return data;
   try { return JSON.parse(data); } catch { return null; }
 }
+
+window.addEventListener("beforeunload", () => {
+  if (activeItem && currentPlaybackTime >= 10) {
+    emit("pause", currentPlaybackTime, playbackDuration);
+  }
+});
