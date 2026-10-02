@@ -40,6 +40,7 @@ const localHistory = {
     localStorage.setItem(HISTORY_KEY, JSON.stringify(items.slice(0, HISTORY_MAX)));
   },
   _key(it) {
+    // Group by show/movie so Continue Watching shows ONE card per title.
     const id = it.tmdbId ?? it.movieId;
     return it.mediaType === "tv" ? `tv:${id}` : `movie:${id}`;
   },
@@ -67,6 +68,7 @@ const localHistory = {
   },
 
   list() {
+    // Show items where: more than 10s or 0.5% played, less than 95% done
     return this._read()
       .filter(i => (i.position >= 10 || i.percent >= 0.5) && i.percent < 95)
       .sort((a, b) => b.updatedAt - a.updatedAt)
@@ -78,10 +80,11 @@ const localHistory = {
   },
 
   get(tmdbId, season, episode) {
+    // Find the most recent entry for this show/movie/episode combo
     return this._read().find(i =>
       Number(i.tmdbId) === Number(tmdbId) &&
-      (i.season ?? null) === (season ?? null) &&
-      (i.episode ?? null) === (episode ?? null)
+      (season == null || (i.season ?? null) === (season ?? null)) &&
+      (episode == null || (i.episode ?? null) === (episode ?? null))
     ) || null;
   }
 };
@@ -159,6 +162,12 @@ async function init() {
   renderRow("comedy-row",    comedy,    "movie");
   renderRow("toprated-row",  topRated,  "movie");
   renderRow("horror-row",    horror,    "movie");
+
+  // Refresh Continue Watching whenever the user returns to the tab
+  // (e.g. they were watching in another tab or came back from the player)
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) renderContinueWatching();
+  });
 }
 
 // ── NAV LINKS ────────────────────────────────────────────────
@@ -183,6 +192,8 @@ function switchSection(section) {
     a.classList.toggle("active", a.dataset.section === section);
   });
 
+  document.getElementById("hero-section").style.display    = (section === "home" || section === "movies") ? "" : "none";
+  document.getElementById("movies-sections").style.display = (section === "home" || section === "movies") ? "" : "none";
   const showHero = (section === "home" || section === "movies");
   document.getElementById("hero-section").style.display    = showHero ? "" : "none";
   document.body.classList.toggle("no-hero", !showHero);
@@ -356,7 +367,7 @@ async function renderContinueWatching() {
   if (authToken) {
     try {
       const { items: serverItems = [] } = await api("GET", "/history/continue");
-      // Merge: server wins on conflict (by mediaType+tmdbId key)
+      // Merge: server wins on conflict (per title key)
       const localMap = new Map(items.map(i => [localHistory._key(i), i]));
       for (const si of serverItems) {
         const key = localHistory._key(si);
@@ -377,8 +388,9 @@ async function renderContinueWatching() {
   document.getElementById("continue-row").innerHTML = items.map(it => {
     const left = Math.max(0, Math.round((it.duration - it.position) / 60));
     const label = it.mediaType === "tv" && it.season
-      ? `${it.title || "Episode"} · S${it.season}E${it.episode}`
+      ? `${it.title || "Episode"} · S${String(it.season).padStart(2,"0")}E${String(it.episode).padStart(2,"0")}`
       : (it.title || "Untitled");
+    const pct = Math.min(100, Math.max(3, it.percent || 0)).toFixed(1);
 
     return `
       <div class="card continue-card" data-id="${it.tmdbId}" data-type="${esc(it.mediaType)}"
@@ -389,11 +401,11 @@ async function renderContinueWatching() {
         <img class="card-poster" src="${it.posterPath ? IMG_BASE + esc(it.posterPath) : PLACEHOLDER}"
              alt="${esc(label)}" loading="lazy">
         <div class="continue-progress">
-          <div class="continue-progress-fill" style="width:${Math.min(100, Math.max(3, it.percent)).toFixed(1)}%"></div>
+          <div class="continue-progress-fill" style="width:${pct}%"></div>
         </div>
         <div class="card-info">
           <div class="card-title">${esc(label)}</div>
-          <div class="card-meta"><span class="continue-remaining">${left} min left</span></div>
+          <div class="card-meta"><span class="continue-remaining">${left > 0 ? left + " min left" : "Almost done"}</span></div>
         </div>
       </div>`;
   }).join("");
@@ -624,6 +636,7 @@ async function openTVModal(tvId) {
       <!-- Season / Episode Picker -->
       <div class="episode-picker">
         <div class="picker-row">
+          <select class="season-select" id="season-select" onchange="loadEpisodes(${tvId}, '${tvPoster}')">
           <select class="season-select" id="season-select" onchange="loadEpisodes(${tvId}, '${details.name.replace(/'/g,"\\'")}', '${tvPoster}')">
             ${seasonOpts}
           </select>
@@ -649,6 +662,7 @@ async function openTVModal(tvId) {
     </div>`;
 
   // Auto-load season 1 episodes
+  if (seasons.length) loadEpisodes(tvId, tvPoster);
   if (seasons.length) loadEpisodes(tvId, details.name, tvPoster);
 }
 
@@ -671,13 +685,13 @@ async function loadEpisodes(tvId, showName = "", tvPoster = "") {
     <div class="episode-card" onclick="openPlayerTV(${tvId}, '${showName.replace(/'/g,"\\'")}', ${seasonNum}, ${ep.episode_number}, '${tvPoster || ep.still_path || ""}')">
       <div class="ep-thumb-wrap">
         ${ep.still_path
-          ? `<img class="ep-thumb" src="${IMG_BASE}${ep.still_path}" loading="lazy">`
+          ? `<img class="ep-thumb" src="${IMG_BASE}${ep.still_path}" alt="${esc(ep.name)}" loading="lazy">`
           : `<div class="ep-thumb-placeholder">EP ${ep.episode_number}</div>`}
         <div class="ep-play-icon">▶</div>
       </div>
       <div class="ep-info">
         <div class="ep-num">Episode ${ep.episode_number}</div>
-        <div class="ep-name">${ep.name}</div>
+        <div class="ep-name">${esc(ep.name)}</div>
         ${ep.runtime ? `<div class="ep-runtime">${ep.runtime}m</div>` : ""}
       </div>
     </div>`).join("");
@@ -874,7 +888,7 @@ onPlayerEvent = ({ event, currentTime, duration, item }) => {
 
 // Persist watch position — this is what Continue Watching reads.
 // Always writes to localStorage (works without login).
-// Also syncs to server when authenticated. Throttled to one write per 3s.
+// Also syncs to server when authenticated. Throttled to 3s.
 let lastProgressWrite = 0;
 function saveProgress(item, currentTime, duration, force = false) {
   if (!item?.movieId || !currentTime || !duration) return;

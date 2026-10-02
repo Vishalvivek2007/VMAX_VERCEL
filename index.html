@@ -108,6 +108,12 @@
 
   <!-- MOVIES SECTIONS -->
   <div id="movies-sections">
+    <div class="section" id="continue-section" style="display:none">
+      <div class="section-header">
+        <div class="section-title">Continue Watching</div>
+      </div>
+      <div class="scroll-row" id="continue-row"></div>
+    </div>
 
     <div class="section">
       <div class="section-header">
@@ -273,6 +279,7 @@
   <div id="modal-body" class="modal-content"></div>
 </div>
 
+<script src="src/protect.js"></script>
 <script src="vendor/hls.min.js"></script>
 <!-- player.js declares onPlayerEvent, which scripts.js assigns — load it first. -->
 <script src="src/player.js"></script>
