@@ -174,11 +174,12 @@ async function init() {
 
 // ── NAV LINKS ────────────────────────────────────────────────
 function initNavLinks() {
-  document.querySelectorAll(".nav-links a").forEach(a => {
+  document.querySelectorAll(".nav-links a, .mobile-nav-item").forEach(a => {
     a.addEventListener("click", e => {
       e.preventDefault();
       const section = a.dataset.section;
       switchSection(section);
+      window.scrollTo({ top: 0, behavior: "smooth" });
     });
   });
 
@@ -190,7 +191,7 @@ function initNavLinks() {
 
 function switchSection(section) {
   currentSection = section;
-  document.querySelectorAll(".nav-links a").forEach(a => {
+  document.querySelectorAll(".nav-links a, .mobile-nav-item").forEach(a => {
     a.classList.toggle("active", a.dataset.section === section);
   });
 
