@@ -40,7 +40,7 @@ const localHistory = {
     localStorage.setItem(HISTORY_KEY, JSON.stringify(items.slice(0, HISTORY_MAX)));
   },
   _key(it) {
-    // Group by show/movie so Continue Watching shows ONE card per title.
+    return `${it.tmdbId}:${it.season ?? ""}:${it.episode ?? ""}`;
     const id = it.tmdbId ?? it.movieId;
     return it.mediaType === "tv" ? `tv:${id}` : `movie:${id}`;
   },
@@ -68,23 +68,24 @@ const localHistory = {
   },
 
   list() {
-    // Show items where: more than 10s or 0.5% played, less than 95% done
     return this._read()
+      .filter(i => i.percent >= 2 && i.percent < 90)
       .filter(i => (i.position >= 10 || i.percent >= 0.5) && i.percent < 95)
       .sort((a, b) => b.updatedAt - a.updatedAt)
       .slice(0, 20);
   },
 
   remove(tmdbId) {
+    this._write(this._read().filter(i => i.tmdbId !== tmdbId));
     this._write(this._read().filter(i => Number(i.tmdbId) !== Number(tmdbId)));
   },
 
   get(tmdbId, season, episode) {
-    // Find the most recent entry for this show/movie/episode combo
     return this._read().find(i =>
+      i.tmdbId === tmdbId &&
       Number(i.tmdbId) === Number(tmdbId) &&
-      (season == null || (i.season ?? null) === (season ?? null)) &&
-      (episode == null || (i.episode ?? null) === (episode ?? null))
+      (i.season ?? null) === (season ?? null) &&
+      (i.episode ?? null) === (episode ?? null)
     ) || null;
   }
 };
@@ -162,12 +163,6 @@ async function init() {
   renderRow("comedy-row",    comedy,    "movie");
   renderRow("toprated-row",  topRated,  "movie");
   renderRow("horror-row",    horror,    "movie");
-
-  // Refresh Continue Watching whenever the user returns to the tab
-  // (e.g. they were watching in another tab or came back from the player)
-  document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) renderContinueWatching();
-  });
 }
 
 // ── NAV LINKS ────────────────────────────────────────────────
@@ -388,24 +383,25 @@ async function renderContinueWatching() {
   document.getElementById("continue-row").innerHTML = items.map(it => {
     const left = Math.max(0, Math.round((it.duration - it.position) / 60));
     const label = it.mediaType === "tv" && it.season
-      ? `${it.title || "Episode"} · S${String(it.season).padStart(2,"0")}E${String(it.episode).padStart(2,"0")}`
+      ? `${it.title || "Episode"} · S${it.season}E${it.episode}`
       : (it.title || "Untitled");
-    const pct = Math.min(100, Math.max(3, it.percent || 0)).toFixed(1);
 
     return `
       <div class="card continue-card" data-id="${it.tmdbId}" data-type="${esc(it.mediaType)}"
            data-season="${it.season || 1}" data-episode="${it.episode || 1}"
+           data-position="${it.position}" data-title="${esc(it.title || "")}">
            data-position="${it.position}" data-title="${esc(it.title || "")}"
            data-poster="${esc(it.posterPath || "")}">
         <div class="continue-remove" data-remove="${it.tmdbId}" title="Remove">✕</div>
         <img class="card-poster" src="${it.posterPath ? IMG_BASE + esc(it.posterPath) : PLACEHOLDER}"
              alt="${esc(label)}" loading="lazy">
         <div class="continue-progress">
-          <div class="continue-progress-fill" style="width:${pct}%"></div>
+          <div class="continue-progress-fill" style="width:${Math.min(100, it.percent).toFixed(1)}%"></div>
+          <div class="continue-progress-fill" style="width:${Math.min(100, Math.max(3, it.percent)).toFixed(1)}%"></div>
         </div>
         <div class="card-info">
           <div class="card-title">${esc(label)}</div>
-          <div class="card-meta"><span class="continue-remaining">${left > 0 ? left + " min left" : "Almost done"}</span></div>
+          <div class="card-meta"><span class="continue-remaining">${left} min left</span></div>
         </div>
       </div>`;
   }).join("");
@@ -636,7 +632,6 @@ async function openTVModal(tvId) {
       <!-- Season / Episode Picker -->
       <div class="episode-picker">
         <div class="picker-row">
-          <select class="season-select" id="season-select" onchange="loadEpisodes(${tvId}, '${tvPoster}')">
           <select class="season-select" id="season-select" onchange="loadEpisodes(${tvId}, '${details.name.replace(/'/g,"\\'")}', '${tvPoster}')">
             ${seasonOpts}
           </select>
@@ -662,7 +657,6 @@ async function openTVModal(tvId) {
     </div>`;
 
   // Auto-load season 1 episodes
-  if (seasons.length) loadEpisodes(tvId, tvPoster);
   if (seasons.length) loadEpisodes(tvId, details.name, tvPoster);
 }
 
@@ -685,13 +679,13 @@ async function loadEpisodes(tvId, showName = "", tvPoster = "") {
     <div class="episode-card" onclick="openPlayerTV(${tvId}, '${showName.replace(/'/g,"\\'")}', ${seasonNum}, ${ep.episode_number}, '${tvPoster || ep.still_path || ""}')">
       <div class="ep-thumb-wrap">
         ${ep.still_path
-          ? `<img class="ep-thumb" src="${IMG_BASE}${ep.still_path}" alt="${esc(ep.name)}" loading="lazy">`
+          ? `<img class="ep-thumb" src="${IMG_BASE}${ep.still_path}" loading="lazy">`
           : `<div class="ep-thumb-placeholder">EP ${ep.episode_number}</div>`}
         <div class="ep-play-icon">▶</div>
       </div>
       <div class="ep-info">
         <div class="ep-num">Episode ${ep.episode_number}</div>
-        <div class="ep-name">${esc(ep.name)}</div>
+        <div class="ep-name">${ep.name}</div>
         ${ep.runtime ? `<div class="ep-runtime">${ep.runtime}m</div>` : ""}
       </div>
     </div>`).join("");
@@ -882,6 +876,7 @@ onPlayerEvent = ({ event, currentTime, duration, item }) => {
     status.textContent = { play: "▶ Playing", pause: "⏸ Paused", ended: "✓ Finished" }[event] || "";
   }
 
+  saveProgress(item, currentTime, duration);
   const isImmediate = event === "pause" || event === "ended" || event === "play";
   saveProgress(item, currentTime, duration, isImmediate);
 };
