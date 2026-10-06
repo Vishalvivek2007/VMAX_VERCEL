@@ -4,6 +4,7 @@ const cache   = require("../lib/cache");
 const router = express.Router();
 const TMDB_BASE  = "https://api.themoviedb.org/3";
 const TMDB_TOKEN = process.env.API_READ_ACCESS;
+const TMDB_KEY   = process.env.API_KEY || "d21a71154cf569509f6f03739e4a33da";
 
 // Allowlist so this can't be used as an open TMDB proxy by anyone else.
 // Add patterns here as the frontend needs new endpoints.
@@ -33,12 +34,10 @@ router.get("/*", async (req, res) => {
   if (!ALLOWED.some(rx => rx.test(path))) {
     return res.status(403).json({ error: "Endpoint not allowed" });
   }
-  if (!TMDB_TOKEN) {
-    return res.status(500).json({ error: "TMDB token not configured on server" });
-  }
 
   const qs  = new URLSearchParams(req.query);
   if (!qs.has("language")) qs.set("language", "en-US");
+  if (!TMDB_TOKEN) qs.set("api_key", TMDB_KEY);
   const key = `tmdb:${path}?${qs}`;
 
   const hit = cache.get(key);
@@ -48,8 +47,10 @@ router.get("/*", async (req, res) => {
   }
 
   try {
+    const headers = { accept: "application/json" };
+    if (TMDB_TOKEN) headers.Authorization = `Bearer ${TMDB_TOKEN}`;
     const upstream = await fetch(`${TMDB_BASE}${path}?${qs}`, {
-      headers: { Authorization: `Bearer ${TMDB_TOKEN}`, accept: "application/json" },
+      headers,
       signal: AbortSignal.timeout(8000)
     });
 

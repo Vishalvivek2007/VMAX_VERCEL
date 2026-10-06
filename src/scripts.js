@@ -5,10 +5,17 @@ const APP_ORIGIN  = window.location.origin;
 const API_BASE    = `${APP_ORIGIN}/api`;
 const TMDB_BASE   = "https://api.themoviedb.org/3";
 const TMDB_KEY    = "d21a71154cf569509f6f03739e4a33da"; // Embedded for static hosting
-const IMG_BASE    = "https://image.tmdb.org/t/p/w500";
-const IMG_ORIG    = "https://image.tmdb.org/t/p/original";
+const IMG_BASE    = "https://wsrv.nl/?url=https://image.tmdb.org/t/p/w500";
+const IMG_ORIG    = "https://wsrv.nl/?url=https://image.tmdb.org/t/p/original";
 const ACCENT      = "3B5BDB";
 const PLACEHOLDER = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='175' height='263'%3E%3Crect width='175' height='263' fill='%2313131a'/%3E%3Ctext x='50%25' y='50%25' fill='%23555' font-family='sans-serif' font-size='13' text-anchor='middle'%3ENo Image%3C/text%3E%3C/svg%3E";
+
+window.addEventListener("error", e => {
+  const el = e.target;
+  if (el && el.tagName === "IMG" && el.src !== PLACEHOLDER) {
+    el.src = PLACEHOLDER;
+  }
+}, true);
 
 // ── STATE ────────────────────────────────────────────────────
 let currentUser      = JSON.parse(localStorage.getItem(USER_KEY) || "null");

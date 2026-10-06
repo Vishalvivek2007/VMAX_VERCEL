@@ -52,7 +52,7 @@ app.use(helmet({
       defaultSrc:  ["'self'"],
       scriptSrc:   ["'self'", "https://cdn.socket.io"],
       styleSrc:    ["'self'", "'unsafe-inline'"],
-      imgSrc:      ["'self'", "data:", "https://image.tmdb.org", "https://archive.org"],
+      imgSrc:      ["'self'", "data:", "https://image.tmdb.org", "https://wsrv.nl", "https://archive.org"],
       mediaSrc:    ["'self'", "https:", "blob:"],
       connectSrc:  ["'self'", "https:", "wss:"],
       // Allowlist of embed origins. Add a provider's origin here when you add
