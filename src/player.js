@@ -14,6 +14,10 @@ const DRIFT_MS     = 1500;   // room sync: resnap if we're more than this far of
 const TRUSTED_PLAYER_ORIGINS = [
   window.location.origin,
   "https://archive.org",
+  "https://www.2embed.cc",
+  "https://2embed.cc",
+  "https://www.2embed.skin",
+  "https://2embed.skin",
   "https://vidsrc.sbs"
 ];
 
@@ -38,9 +42,18 @@ async function playTitle(item, options = {}) {
   if (item.mediaType === "tv") {
     const s = item.season || 1;
     const e = item.episode || 1;
-    sources.push({ id: "vidking", label: "Vidking Server", kind: "iframe", url: `https://vidsrc.sbs/embed/tv/${tmdbId}/${s}/${e}?color=3B5BDB&autoPlay=true&sub=en${timeParam}` });
+    sources.push(
+      { id: "2embed", label: "2Embed Server", kind: "iframe", url: `https://www.2embed.cc/embedtv/${tmdbId}&s=${s}&e=${e}` },
+      { id: "2embed-skin", label: "2Embed Mirror", kind: "iframe", url: `https://www.2embed.skin/embedtv/${tmdbId}&s=${s}&e=${e}` },
+      { id: "2embed-full", label: "2Embed Full Season", kind: "iframe", url: `https://www.2embed.cc/embedtvfull/${tmdbId}` },
+      { id: "vidking", label: "Vidking Server", kind: "iframe", url: `https://vidsrc.sbs/embed/tv/${tmdbId}/${s}/${e}?color=3B5BDB&autoPlay=true&sub=en${timeParam}` }
+    );
   } else if (item.mediaType === "movie") {
-    sources.push({ id: "vidking", label: "Vidking Server", kind: "iframe", url: `https://vidsrc.sbs/embed/movie/${tmdbId}?color=3B5BDB&autoPlay=true&sub=en${timeParam}` });
+    sources.push(
+      { id: "2embed", label: "2Embed Server", kind: "iframe", url: `https://www.2embed.cc/embed/${tmdbId}` },
+      { id: "2embed-skin", label: "2Embed Mirror", kind: "iframe", url: `https://www.2embed.skin/embed/${tmdbId}` },
+      { id: "vidking", label: "Vidking Server", kind: "iframe", url: `https://vidsrc.sbs/embed/movie/${tmdbId}?color=3B5BDB&autoPlay=true&sub=en${timeParam}` }
+    );
   }
 
   if (!sources.length) return showUnavailable(item);

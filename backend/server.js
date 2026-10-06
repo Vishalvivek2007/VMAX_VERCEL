@@ -57,7 +57,16 @@ app.use(helmet({
       connectSrc:  ["'self'", "https:", "wss:"],
       // Allowlist of embed origins. Add a provider's origin here when you add
       // the provider itself — an embed not listed here will be blocked.
-      frameSrc:    ["'self'", "https://www.youtube.com", "https://archive.org"],
+      frameSrc:    [
+        "'self'",
+        "https://www.youtube.com",
+        "https://archive.org",
+        "https://www.2embed.cc",
+        "https://2embed.cc",
+        "https://www.2embed.skin",
+        "https://2embed.skin",
+        "https://vidsrc.sbs"
+      ],
       objectSrc:   ["'none'"],
       baseUri:     ["'self'"]
     }
