@@ -86,16 +86,27 @@ const localHistory = {
   }
 };
 
-// ── TMDB FETCH (direct) ───────────────────────────────
+// -- TMDB FETCH (proxy -> direct fallback) -------------------------
+// Routes through backend proxy (/api/tmdb) first to avoid ISP blocks.
+// Falls back to direct TMDB API for local dev without a backend.
 async function tmdb(endpoint, params = "") {
+  // Try backend proxy first
   try {
-    const res = await fetch(`${TMDB_BASE}${endpoint}?api_key=${TMDB_KEY}&language=en-US&${params}`);
+    const qs = params ? ("?" + params + "&language=en-US") : "?language=en-US";
+    const res = await fetch(API_BASE + "/tmdb" + endpoint + qs);
+    if (res.ok) {
+      const data = await res.json();
+      if (!data.error) return data.results ?? data;
+    }
+  } catch { /* proxy unavailable - fall through */ }
+
+  // Fallback: direct TMDB (for local dev)
+  try {
+    const res = await fetch(TMDB_BASE + endpoint + "?api_key=" + TMDB_KEY + "&language=en-US&" + params);
     if (!res.ok) return [];
     const data = await res.json();
     return data.results ?? data;
-  } catch {
-    return [];
-  }
+  } catch { return []; }
 }
 
 // ── API FETCH (backend) ──────────────────────────────────────
