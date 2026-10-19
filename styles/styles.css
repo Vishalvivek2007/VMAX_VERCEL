@@ -1353,7 +1353,7 @@ body.no-hero .sections { padding-top: 84px; }
    ═══════════════════════════════════════════════════════════ */
 @media (max-width: 768px) {
   /* ── 1. TOP APP BAR ─────────────────────────────────────── */
-  nav {
+  #main-nav {
     padding: 0 16px;
     height: 56px;
     background: rgba(11, 11, 15, 0.95);
@@ -1362,7 +1362,7 @@ body.no-hero .sections { padding-top: 84px; }
     border-bottom: 1px solid rgba(255, 255, 255, 0.07);
     overflow: visible;
   }
-  nav.scrolled {
+  #main-nav.scrolled {
     height: 56px;
   }
   .nav-logo {
@@ -1385,7 +1385,7 @@ body.no-hero .sections { padding-top: 84px; }
   .mobile-nav {
     display: flex;
     position: fixed;
-    bottom: 0; left: 0; right: 0;
+    top: auto; bottom: 0; left: 0; right: 0;
     height: calc(56px + env(safe-area-inset-bottom, 0px));
     padding-bottom: env(safe-area-inset-bottom, 0px);
     background: rgba(11, 11, 15, 0.96);
